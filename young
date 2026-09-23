@@ -1,0 +1,2839 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+local LP = Players.LocalPlayer
+local PlayerGui = LP:WaitForChild("PlayerGui")
+
+
+local function removeLegacy()
+	local oldGui = PlayerGui:FindFirstChild("FG100Hub")
+	if oldGui then oldGui:Destroy() end
+end
+removeLegacy()
+
+local State = {}
+State.running = true
+State.ready = false
+State.shuttingDown = false
+State.currentTab = nil
+State.themeName = "Violeta"
+State.allToggleControllers = {}
+State.selectorControllers = {}
+State.profileControls = {}
+State.pageScrollPositions = {}
+State.pushOutput = function() end
+
+local connections = {}
+local threads = {}
+local cleanupActions = {}
+
+local function track(connection)
+	if connection then connections[#connections + 1] = connection end
+	return connection
+end
+
+local function addCleanup(callback)
+	if type(callback) == "function" then cleanupActions[#cleanupActions + 1] = callback end
+end
+
+local function disconnectAll()
+	for _, connection in ipairs(connections) do
+		pcall(connection.Disconnect, connection)
+	end
+	table.clear(connections)
+end
+
+
+local Controller = {}
+
+
+local CONFIG = {
+	Title = "  Sosay's Hub  ",
+	BackgroundAsset = "rbxassetid://139632902209610",
+	Size = {
+		DesktopWidth = 548,
+		DesktopHeight = 360,
+		MobileWidthScale = 0.9,
+		MobileHeightScale = 0.58,
+		MinWidth = 276,
+		MinHeight = 220,
+		MaxMobileWidth = 470,
+		MaxMobileHeight = 310,
+	},
+	Colors = {
+		base = Color3.fromRGB(6, 8, 17),
+		panel = Color3.fromRGB(11, 15, 27),
+		row = Color3.fromRGB(19, 24, 39),
+		rowHover = Color3.fromRGB(29, 37, 58),
+		tab = Color3.fromRGB(13, 18, 31),
+		tabOn = Color3.fromRGB(28, 39, 65),
+		cyan = Color3.fromRGB(105, 205, 255),
+		blue = Color3.fromRGB(159, 139, 246),
+		green = Color3.fromRGB(126, 224, 175),
+		yellow = Color3.fromRGB(238, 206, 111),
+		orange = Color3.fromRGB(236, 159, 93),
+		red = Color3.fromRGB(255, 55, 82),
+		white = Color3.fromRGB(246, 248, 252),
+		soft = Color3.fromRGB(225, 230, 239),
+		dim = Color3.fromRGB(165, 174, 189),
+		black = Color3.fromRGB(0, 0, 0),
+	},
+	Tabs = {
+		{"Info", 88},
+	},
+}
+local C = CONFIG.Colors
+local UI_FONT = Enum.Font.FredokaOne
+C.fontBold = Enum.Font.FredokaOne
+State.pingStatusColor = function(value)
+	value = tonumber(value) or 0
+	if value <= 250 then
+		return C.green
+	end
+	if value < 800 then
+		return C.yellow
+	end
+	return C.red
+end
+local function getPing()
+	local ok, value = pcall(function()
+		return math.floor((LP:GetNetworkPing() or 0) * 1000 + 0.5)
+	end)
+	return ok and value or 0
+end
+
+local DISCORD_LINK = "https://discord.gg/lua"
+
+local function copyText(text)
+	local ok = pcall(function()
+		if setclipboard then
+			setclipboard(text)
+		else
+			error("setclipboard no disponible")
+		end
+	end)
+	return ok
+end
+
+local function viewportSize()
+	local camera = workspace.CurrentCamera
+	return camera and camera.ViewportSize or Vector2.new(1280, 720)
+end
+
+
+local function getHubSize()
+	local viewport = viewportSize()
+	local mobile = viewport.X < 760 or (UserInputService.TouchEnabled and viewport.X < 1100)
+	if mobile then
+		return math.floor(math.clamp(viewport.X * CONFIG.Size.MobileWidthScale, CONFIG.Size.MinWidth, CONFIG.Size.MaxMobileWidth)),
+			math.floor(math.clamp(viewport.Y * CONFIG.Size.MobileHeightScale, CONFIG.Size.MinHeight, CONFIG.Size.MaxMobileHeight))
+	end
+	return CONFIG.Size.DesktopWidth, CONFIG.Size.DesktopHeight
+end
+
+local hubWidth, hubHeight = getHubSize()
+local HEADER_H = 54
+local TAB_H = 40
+local MIN_WIDTH = UserInputService.TouchEnabled and viewportSize().X < 1100 and 132 or 168
+local MIN_HEIGHT = UserInputService.TouchEnabled and viewportSize().X < 1100 and 64 or 68
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "FG100Hub"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.DisplayOrder = 1000
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+pcall(function()
+	ScreenGui.AutoLocalize = false
+end)
+ScreenGui:SetAttribute("Young0x", "0x")
+ScreenGui:SetAttribute("FG100", "Young0x")
+ScreenGui.Parent = PlayerGui
+
+-- UI-only build: localization/game automation removed; visible UI kept.
+State.localize = function(value) return value end
+State.translateText = State.localize
+State.bindLanguage = function() end
+State.setLanguage = function() return State.language end
+State.getLanguage = function() return State.language end
+
+
+local function styleHubText(object)
+	if object:IsA("GuiObject") then
+		object:SetAttribute("Young0x", "0x")
+		object:SetAttribute("FG100", "Young0x")
+	end
+	if object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then
+		if object:GetAttribute("KeepTextStyle") then
+			return
+		end
+		local prominent = object:IsA("TextButton") or object.TextSize >= 14
+		object.Font = prominent and C.fontBold or UI_FONT
+		object.TextColor3 = C.white
+		object.TextStrokeColor3 = C.black
+		object.TextStrokeTransparency = prominent and 0.42 or 0.62
+		if not object.TextScaled and object.TextSize < 12 then
+			object.TextSize = 12
+		end
+		object.TextWrapped = true
+		object.TextScaled = true
+		local textLimit = object:FindFirstChild("TextLimit")
+		if not textLimit then
+			textLimit = Instance.new("UITextSizeConstraint")
+			textLimit.Name = "TextLimit"
+			textLimit.MinTextSize = 8
+			textLimit.MaxTextSize = math.max(8, math.floor(object.TextSize))
+			textLimit.Parent = object
+		end
+		if object:IsA("TextBox") then
+			object.PlaceholderColor3 = C.soft
+		end
+	end
+end
+
+track(ScreenGui.DescendantAdded:Connect(function(object)
+	task.defer(function()
+		if State.running and object and object.Parent and object:IsDescendantOf(ScreenGui) then
+			styleHubText(object)
+			State.bindLanguage(object)
+		end
+	end)
+end))
+
+local AnimationRoot = Instance.new("Frame")
+AnimationRoot.Name = "AnimationRoot"
+AnimationRoot.AnchorPoint = Vector2.new(0.5, 0.5)
+AnimationRoot.Size = UDim2.fromOffset(hubWidth, hubHeight)
+AnimationRoot.Position = UDim2.fromScale(0.5, 0.5)
+AnimationRoot.BackgroundTransparency = 1
+AnimationRoot.BorderSizePixel = 0
+AnimationRoot.Parent = ScreenGui
+do
+	local scale = Instance.new("UIScale")
+	scale.Name = "MotionScale"
+	scale.Scale = 1
+	scale.Parent = AnimationRoot
+end
+
+local Shadow = Instance.new("Frame")
+Shadow.Name = "Shadow"
+Shadow.AnchorPoint = Vector2.new(0.5, 0.5)
+Shadow.Size = UDim2.fromOffset(hubWidth, hubHeight)
+Shadow.Position = UDim2.new(0.5, 0, 0.5, 8)
+Shadow.BackgroundColor3 = C.black
+Shadow.BackgroundTransparency = 1
+Shadow.BorderSizePixel = 0
+Shadow.ClipsDescendants = true
+Shadow.ZIndex = 1
+Shadow.Parent = AnimationRoot
+local ShadowCorner = Instance.new("UICorner", Shadow)
+ShadowCorner.CornerRadius = UDim.new(0, 15)
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+MainFrame.Size = UDim2.fromOffset(hubWidth - 2, hubHeight - 2)
+MainFrame.Position = UDim2.fromScale(0.5, 0.5)
+MainFrame.BackgroundColor3 = C.base
+MainFrame.BackgroundTransparency = 0.03
+MainFrame.BorderSizePixel = 0
+MainFrame.ClipsDescendants = true
+MainFrame.ZIndex = 3
+MainFrame.Parent = AnimationRoot
+local MainCorner = Instance.new("UICorner", MainFrame)
+MainCorner.CornerRadius = UDim.new(0, 12)
+
+do
+	local backgroundGradient = Instance.new("UIGradient")
+	backgroundGradient.Rotation = 24
+	backgroundGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(7, 12, 28)),
+		ColorSequenceKeypoint.new(0.48, Color3.fromRGB(10, 13, 29)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(7, 7, 18)),
+	})
+	backgroundGradient.Parent = MainFrame
+	local topSheen = Instance.new("Frame")
+	topSheen.Size = UDim2.new(1, 0, 0, 90)
+	topSheen.BackgroundColor3 = C.white
+	topSheen.BackgroundTransparency = 0.975
+	topSheen.BorderSizePixel = 0
+	topSheen.ZIndex = 3
+	topSheen.Visible = false
+	topSheen.Parent = MainFrame
+	local sheenGradient = Instance.new("UIGradient")
+	sheenGradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.65),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	sheenGradient.Parent = topSheen
+end
+
+do
+	local backgroundArt = Instance.new("ImageLabel")
+	backgroundArt.Name = "BackgroundArt"
+	backgroundArt.Size = UDim2.fromScale(1, 1)
+	backgroundArt.Position = UDim2.fromOffset(0, 0)
+	backgroundArt.BackgroundTransparency = 1
+	backgroundArt.BorderSizePixel = 0
+	backgroundArt.ClipsDescendants = true
+	backgroundArt.Image = CONFIG.BackgroundAsset
+	backgroundArt.Visible = CONFIG.BackgroundAsset ~= ""
+	backgroundArt.ImageColor3 = Color3.fromRGB(204, 211, 255)
+	backgroundArt.ImageTransparency = 0.56
+	backgroundArt.ScaleType = Enum.ScaleType.Crop
+	backgroundArt.ZIndex = 4
+	backgroundArt.Parent = MainFrame
+	Instance.new("UICorner", backgroundArt).CornerRadius = UDim.new(0, 12)
+
+	local backgroundShade = Instance.new("Frame")
+	backgroundShade.Name = "BackgroundShade"
+	backgroundShade.Size = UDim2.fromScale(1, 1)
+	backgroundShade.BackgroundColor3 = Color3.fromRGB(5, 7, 16)
+	backgroundShade.BackgroundTransparency = 0.24
+	backgroundShade.BorderSizePixel = 0
+	backgroundShade.ClipsDescendants = true
+	backgroundShade.ZIndex = 5
+	backgroundShade.Parent = MainFrame
+	Instance.new("UICorner", backgroundShade).CornerRadius = UDim.new(0, 12)
+
+	task.defer(function()
+		pcall(function()
+			local contentProvider = game:GetService("ContentProvider")
+			contentProvider:PreloadAsync({ backgroundArt })
+		end)
+	end)
+end
+
+do
+	local dim = Instance.new("Frame")
+	dim.Size = UDim2.fromScale(1, 1)
+	dim.BackgroundColor3 = C.panel
+	dim.BackgroundTransparency = 0.64
+	dim.BorderSizePixel = 0
+	dim.ZIndex = 4
+	dim.Visible = false
+	dim.Parent = MainFrame
+	Instance.new("UICorner", dim).CornerRadius = UDim.new(0, 12)
+end
+
+local Border = Instance.new("Frame")
+Border.Name = "Border"
+Border.AnchorPoint = Vector2.new(0.5, 0.5)
+Border.Size = UDim2.fromOffset(hubWidth, hubHeight)
+Border.Position = UDim2.fromScale(0.5, 0.5)
+Border.BackgroundColor3 = C.black
+Border.BackgroundTransparency = 1
+Border.BorderSizePixel = 0
+Border.ClipsDescendants = true
+Border.ZIndex = 2
+Border.Parent = AnimationRoot
+local BorderCorner = Instance.new("UICorner", Border)
+BorderCorner.CornerRadius = UDim.new(0, 13)
+do
+	local stroke = Instance.new("UIStroke")
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Color = Color3.fromRGB(208, 225, 255)
+	stroke.Thickness = 1.65
+	stroke.Transparency = 0.06
+	stroke.LineJoinMode = Enum.LineJoinMode.Round
+	stroke.Parent = Border
+	local strokeGradient = Instance.new("UIGradient")
+	strokeGradient.Rotation = 12
+	strokeGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(192, 224, 255)),
+		ColorSequenceKeypoint.new(0.52, Color3.fromRGB(188, 137, 255)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(192, 224, 255)),
+	})
+	strokeGradient.Parent = stroke
+	local auraStroke = Instance.new("UIStroke")
+	auraStroke.Name = "AuraStroke"
+	auraStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	auraStroke.Color = Color3.fromRGB(142, 188, 255)
+	auraStroke.Thickness = 4
+	auraStroke.Transparency = 0.70
+	auraStroke.LineJoinMode = Enum.LineJoinMode.Round
+	auraStroke.Parent = Border
+end
+MainFrame.Parent = Border
+
+local BorderSweep = Instance.new("Frame")
+BorderSweep.Name = "BorderSweep"
+BorderSweep.AnchorPoint = Vector2.new(0.5, 0.5)
+BorderSweep.Size = UDim2.fromOffset(68, 4)
+BorderSweep.Position = UDim2.fromOffset(28, 2)
+BorderSweep.BackgroundColor3 = C.black
+BorderSweep.BorderSizePixel = 0
+BorderSweep.Visible = false
+BorderSweep.ZIndex = 82
+BorderSweep.Parent = Border
+Instance.new("UICorner", BorderSweep).CornerRadius = UDim.new(1, 0)
+do
+	local gradient = Instance.new("UIGradient")
+	gradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.22, 0.18),
+		NumberSequenceKeypoint.new(0.5, 0),
+		NumberSequenceKeypoint.new(0.78, 0.18),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	gradient.Parent = BorderSweep
+end
+
+local DragHandle, HeaderFrame, HeaderTitle, MiniIcon
+local MiniBubble, MiniDragHandle
+
+local playMiniPress = function() end
+do
+	local headerBackdrop = Instance.new("Frame")
+	headerBackdrop.Name = "TopbarBackdrop"
+	headerBackdrop.Size = UDim2.new(1, 0, 0, HEADER_H)
+	headerBackdrop.Position = UDim2.fromOffset(0, 0)
+	headerBackdrop.BackgroundTransparency = 1
+	headerBackdrop.BorderSizePixel = 0
+	headerBackdrop.ClipsDescendants = true
+	headerBackdrop.ZIndex = 9
+	headerBackdrop.Parent = MainFrame
+
+	local headerFill = Instance.new("Frame")
+	headerFill.Name = "HeaderFill"
+	headerFill.Size = UDim2.new(1, 0, 1, 18)
+	headerFill.BackgroundColor3 = Color3.fromRGB(8, 12, 25)
+	headerFill.BackgroundTransparency = 0.36
+	headerFill.BorderSizePixel = 0
+	headerFill.Visible = false
+	headerFill.ZIndex = 9
+	headerFill.Parent = headerBackdrop
+	Instance.new("UICorner", headerFill).CornerRadius = UDim.new(0, 14)
+	local headerGradient = Instance.new("UIGradient")
+	headerGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(9, 24, 43)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(12, 14, 31)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(19, 10, 35)),
+	})
+	headerGradient.Parent = headerFill
+	local headerLine = Instance.new("Frame")
+	headerLine.Size = UDim2.new(1, -28, 0, 1)
+	headerLine.Position = UDim2.new(0, 14, 1, -1)
+	headerLine.BackgroundColor3 = C.blue
+	headerLine.BackgroundTransparency = 0.62
+	headerLine.BorderSizePixel = 0
+	headerLine.ZIndex = 11
+	headerLine.Parent = headerBackdrop
+	local headerLineGradient = Instance.new("UIGradient")
+	headerLineGradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.22, 0.18),
+		NumberSequenceKeypoint.new(0.78, 0.18),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	headerLineGradient.Parent = headerLine
+	headerLine.Visible = false
+
+	local header = Instance.new("Frame")
+	HeaderFrame = header
+	header.Name = "Topbar"
+	header.Size = UDim2.new(1, 0, 0, HEADER_H)
+	header.BackgroundTransparency = 1
+	header.BorderSizePixel = 0
+	header.ClipsDescendants = true
+	header.ZIndex = 10
+	header.Parent = MainFrame
+	local Title = Instance.new("TextLabel")
+	HeaderTitle = Title
+	Title.AnchorPoint = Vector2.new(0.5, 0)
+	Title.Size = UDim2.new(1, -16, 0, 29)
+	Title.Position = UDim2.new(0.5, 0, 0, 4)
+	Title.BackgroundTransparency = 1
+	Title.Text = CONFIG.Title
+	Title.TextColor3 = C.white
+	Title.TextStrokeColor3 = C.black
+	Title.TextStrokeTransparency = 0.70
+	Title.Font = C.fontBold
+	Title.TextSize = 19
+	Title.TextScaled = true
+	Title.TextXAlignment = Enum.TextXAlignment.Center
+	Title.ZIndex = 12
+	Title.Parent = header
+	Instance.new("UITextSizeConstraint", Title).MaxTextSize = 19
+	local titleShine = Instance.new("UIGradient")
+	titleShine.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(246, 248, 252)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(221, 205, 255)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(246, 248, 252)),
+	})
+	titleShine.Parent = Title
+
+	MiniIcon = Instance.new("TextLabel")
+	MiniIcon.Name = "MiniIcon"
+	MiniIcon.Size = UDim2.fromScale(1, 1)
+	MiniIcon.BackgroundTransparency = 1
+	MiniIcon.Text = "FG100%"
+	MiniIcon.TextColor3 = C.white
+	MiniIcon.TextStrokeColor3 = C.black
+	MiniIcon.TextStrokeTransparency = 0.06
+	MiniIcon.Font = C.fontBold
+	MiniIcon.TextSize = 16
+	MiniIcon.Visible = false
+	MiniIcon.ZIndex = 12
+	MiniIcon.Parent = header
+	DragHandle = Instance.new("TextButton")
+	DragHandle.Name = "MinimizeHub"
+	DragHandle:SetAttribute("OutputLabel", "Minimizar hub")
+	DragHandle.Size = UDim2.fromScale(1, 1)
+	DragHandle.BackgroundTransparency = 1
+	DragHandle.Text = ""
+	DragHandle.AutoButtonColor = false
+	DragHandle.ZIndex = 60
+	DragHandle.Parent = header
+end
+
+do
+	MiniBubble = Instance.new("Frame")
+	MiniBubble.Name = "MiniBubble"
+	MiniBubble.AnchorPoint = Vector2.new(0.5, 0.5)
+	MiniBubble.Size = UDim2.fromOffset(MIN_WIDTH, MIN_HEIGHT)
+	MiniBubble.Position = UDim2.new(
+		0.5,
+		-math.floor(hubWidth * 0.5 + MIN_WIDTH * 0.5 + 18),
+		0.5,
+		0
+	)
+	MiniBubble.BackgroundColor3 = Color3.fromRGB(20, 24, 32)
+	MiniBubble.BackgroundTransparency = 0.02
+	MiniBubble.BorderSizePixel = 0
+	MiniBubble.ClipsDescendants = true
+	MiniBubble.Visible = true
+	MiniBubble.ZIndex = 100
+	MiniBubble.Parent = ScreenGui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, MIN_HEIGHT < 50 and 10 or 12)
+	corner.Parent = MiniBubble
+	local miniScale = Instance.new("UIScale")
+	miniScale.Scale = 1
+	miniScale.Parent = MiniBubble
+
+	local miniGradient = Instance.new("UIGradient")
+	miniGradient.Rotation = 0
+	miniGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(17, 20, 27)),
+		ColorSequenceKeypoint.new(0.42, Color3.fromRGB(31, 38, 49)),
+		ColorSequenceKeypoint.new(0.58, Color3.fromRGB(51, 61, 76)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 24, 32)),
+	})
+	miniGradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(0.5, 0),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	miniGradient.Parent = MiniBubble
+
+	local stroke = Instance.new("UIStroke")
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Color = Color3.fromRGB(172, 198, 219)
+	stroke.Thickness = 1.25
+	stroke.Transparency = 0.18
+	stroke.LineJoinMode = Enum.LineJoinMode.Round
+	stroke.Parent = MiniBubble
+	local auraStroke = Instance.new("UIStroke")
+	auraStroke.Name = "AuraStroke"
+	auraStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	auraStroke.Color = Color3.fromRGB(134, 191, 232)
+	auraStroke.Thickness = 3
+	auraStroke.Transparency = 0.84
+	auraStroke.LineJoinMode = Enum.LineJoinMode.Round
+	auraStroke.Parent = MiniBubble
+
+	local miniAccent = Instance.new("Frame")
+	miniAccent.Name = "BottomAccent"
+	miniAccent.Size = UDim2.new(1, -10, 0, 2)
+	miniAccent.Position = UDim2.new(0, 5, 1, -4)
+	miniAccent.BackgroundColor3 = C.cyan
+	miniAccent.BackgroundTransparency = 0.42
+	miniAccent.BorderSizePixel = 0
+	miniAccent.ZIndex = 101
+	miniAccent.Parent = MiniBubble
+	Instance.new("UICorner", miniAccent).CornerRadius = UDim.new(1, 0)
+	local miniAccentGradient = Instance.new("UIGradient")
+	miniAccentGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(22, 27, 36)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(145, 207, 245)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(22, 27, 36)),
+	})
+	miniAccentGradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.78),
+		NumberSequenceKeypoint.new(0.5, 0.28),
+		NumberSequenceKeypoint.new(1, 0.78),
+	})
+	miniAccentGradient.Parent = miniAccent
+
+	local miniStars = Instance.new("ImageLabel")
+	miniStars.Name = "Stars"
+	miniStars.Size = UDim2.fromScale(1, 1)
+	miniStars.BackgroundTransparency = 1
+	miniStars.Image = CONFIG.BackgroundAsset
+	miniStars.ImageColor3 = Color3.fromRGB(215, 229, 244)
+	miniStars.ImageTransparency = 0.36
+	miniStars.ScaleType = Enum.ScaleType.Crop
+	miniStars.ZIndex = 100
+	miniStars.Parent = MiniBubble
+	Instance.new("UICorner", miniStars).CornerRadius = corner.CornerRadius
+
+	local icon = Instance.new("TextLabel")
+	MiniIcon = icon
+	icon.Name = "Icon"
+	icon.Size = UDim2.new(1, 0, 0.58, 0)
+	icon.BackgroundTransparency = 1
+	icon.Text = "FG100%"
+	icon.TextColor3 = C.white
+	icon.TextStrokeColor3 = C.black
+	icon.TextStrokeTransparency = 0.12
+	icon.Font = C.fontBold
+	icon.TextSize = MIN_HEIGHT < 50 and 12 or 16
+	icon.ZIndex = 101
+	icon:SetAttribute("KeepTextStyle", true)
+	icon.Parent = MiniBubble
+
+	State.MiniStats = Instance.new("TextLabel")
+	State.MiniStats.Name = "LiveStats"
+	State.MiniStats.Size = UDim2.new(1, -12, 0.42, -3)
+	State.MiniStats.Position = UDim2.new(0, 6, 0.58, -2)
+	State.MiniStats.BackgroundTransparency = 1
+	State.MiniStats.Text = "-- FPS  •  -- ms"
+	State.MiniStats.TextColor3 = C.cyan
+	State.MiniStats.TextStrokeColor3 = C.black
+	State.MiniStats.TextStrokeTransparency = 0.28
+	State.MiniStats.Font = Enum.Font.GothamBold
+	State.MiniStats.TextScaled = true
+	State.MiniStats.ZIndex = 101
+	State.MiniStats:SetAttribute("KeepTextStyle", true)
+	State.MiniStats:SetAttribute("NoTranslate", true)
+	State.MiniStats.Parent = MiniBubble
+	local miniStatsLimit = Instance.new("UITextSizeConstraint")
+	miniStatsLimit.MinTextSize = 7
+	miniStatsLimit.MaxTextSize = MIN_HEIGHT < 50 and 9 or 11
+	miniStatsLimit.Parent = State.MiniStats
+
+	MiniDragHandle = Instance.new("TextButton")
+	MiniDragHandle.Name = "DragHandle"
+	MiniDragHandle:SetAttribute("OutputLabel", "Abrir hub")
+	MiniDragHandle.Size = UDim2.fromScale(1, 1)
+	MiniDragHandle.BackgroundTransparency = 1
+	MiniDragHandle.Text = ""
+	MiniDragHandle.AutoButtonColor = false
+	MiniDragHandle.ZIndex = 102
+	MiniDragHandle.Parent = MiniBubble
+
+	local miniHovered = false
+	local pressGeneration = 0
+
+	playMiniPress = function()
+		if not MiniBubble or not MiniBubble.Parent then return end
+		pressGeneration = pressGeneration + 1
+		local generation = pressGeneration
+		TweenService:Create(miniScale, TweenInfo.new(0.07, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			Scale = 0.91,
+		}):Play()
+		TweenService:Create(MiniBubble, TweenInfo.new(0.07, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			BackgroundTransparency = 0,
+		}):Play()
+		TweenService:Create(stroke, TweenInfo.new(0.07, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			Transparency = 0.05,
+			Thickness = 1.8,
+		}):Play()
+		TweenService:Create(auraStroke, TweenInfo.new(0.07, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			Transparency = 0.66,
+			Thickness = 4.2,
+		}):Play()
+		TweenService:Create(miniGradient, TweenInfo.new(0.07, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			Offset = Vector2.new(-0.16, 0),
+		}):Play()
+		task.delay(0.08, function()
+			if generation ~= pressGeneration or not MiniBubble.Parent then return end
+			TweenService:Create(miniScale, TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+				Scale = miniHovered and 1.045 or 1,
+			}):Play()
+			TweenService:Create(MiniBubble, TweenInfo.new(0.18, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+				BackgroundTransparency = 0.02,
+			}):Play()
+			TweenService:Create(stroke, TweenInfo.new(0.18, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+				Transparency = miniHovered and 0.08 or 0.18,
+				Thickness = miniHovered and 1.6 or 1.25,
+			}):Play()
+			TweenService:Create(auraStroke, TweenInfo.new(0.22, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+				Transparency = miniHovered and 0.72 or 0.84,
+				Thickness = miniHovered and 3.8 or 3,
+			}):Play()
+			TweenService:Create(miniGradient, TweenInfo.new(0.20, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+				Offset = miniHovered and Vector2.new(0.16, 0) or Vector2.zero,
+			}):Play()
+		end)
+	end
+
+	track(MiniDragHandle.MouseEnter:Connect(function()
+		miniHovered = true
+		TweenService:Create(miniScale, TweenInfo.new(0.16, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			Scale = 1.045,
+		}):Play()
+		TweenService:Create(stroke, TweenInfo.new(0.16, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			Transparency = 0.08,
+			Thickness = 1.6,
+		}):Play()
+		TweenService:Create(auraStroke, TweenInfo.new(0.18, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			Transparency = 0.72,
+			Thickness = 3.8,
+		}):Play()
+		TweenService:Create(miniGradient, TweenInfo.new(0.38, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+			Offset = Vector2.new(0.16, 0),
+		}):Play()
+		TweenService:Create(miniAccent, TweenInfo.new(0.16, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			BackgroundTransparency = 0.24,
+		}):Play()
+	end))
+	track(MiniDragHandle.MouseLeave:Connect(function()
+		miniHovered = false
+		TweenService:Create(miniScale, TweenInfo.new(0.20, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			Scale = 1,
+		}):Play()
+		TweenService:Create(stroke, TweenInfo.new(0.20, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			Transparency = 0.18,
+			Thickness = 1.25,
+		}):Play()
+		TweenService:Create(auraStroke, TweenInfo.new(0.22, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			Transparency = 0.84,
+			Thickness = 3,
+		}):Play()
+		TweenService:Create(miniGradient, TweenInfo.new(0.22, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			Offset = Vector2.zero,
+		}):Play()
+		TweenService:Create(miniAccent, TweenInfo.new(0.20, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			BackgroundTransparency = 0.42,
+		}):Play()
+	end))
+end
+
+do
+	local sounds = Shared and Shared:FindFirstChild("assets")
+	sounds = sounds and sounds:FindFirstChild("sounds")
+	local template = sounds and sounds:FindFirstChild("whooshSound")
+	local sound = template and template:IsA("Sound") and template:Clone() or Instance.new("Sound")
+	State.uiWhoosh = sound
+	sound.Name = "UiWhoosh"
+	sound.SoundId = sound.SoundId ~= "" and sound.SoundId or "rbxassetid://3611025588"
+	sound.Volume = 0.26
+	sound.Parent = game:GetService("SoundService")
+	addCleanup(function()
+		if State.uiWhoosh then State.uiWhoosh:Destroy(); State.uiWhoosh = nil end
+	end)
+end
+
+
+State.playUiWhoosh = function(opening)
+	local sound = State.uiWhoosh
+	if not sound then return end
+	pcall(function()
+		sound:Stop()
+		sound.TimePosition = 0
+		sound.PlaybackSpeed = opening and 0.92 or 1.18
+		sound:Play()
+	end)
+end
+
+local TabBar = Instance.new("ScrollingFrame")
+TabBar.Name = "TabBar"
+TabBar.Size = UDim2.new(1, -24, 0, TAB_H)
+TabBar.Position = UDim2.new(0, 0, 0, HEADER_H)
+TabBar.BackgroundColor3 = Color3.fromRGB(8, 12, 25)
+TabBar.BackgroundTransparency = 1
+TabBar.BorderSizePixel = 0
+TabBar.ClipsDescendants = true
+TabBar.ScrollBarThickness = 0
+TabBar.ScrollingDirection = Enum.ScrollingDirection.X
+TabBar.CanvasSize = UDim2.new()
+TabBar.ZIndex = 10
+TabBar.Parent = MainFrame
+local TabCorner = Instance.new("UICorner", TabBar)
+TabCorner.CornerRadius = UDim.new(0, 0)
+
+local tabLayout = Instance.new("UIListLayout", TabBar)
+tabLayout.FillDirection = Enum.FillDirection.Horizontal
+tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+tabLayout.Padding = UDim.new(0, 4)
+
+do
+	local tabPadding = Instance.new("UIPadding", TabBar)
+	tabPadding.PaddingLeft = UDim.new(0, 6)
+	tabPadding.PaddingRight = UDim.new(0, 6)
+	tabPadding.PaddingTop = UDim.new(0, 4)
+	tabPadding.PaddingBottom = UDim.new(0, 4)
+end
+
+local Content = Instance.new("Frame")
+Content.Size = UDim2.new(1, 0, 1, -(HEADER_H + TAB_H + 8))
+Content.Position = UDim2.new(0, 0, 0, HEADER_H + TAB_H)
+Content.BackgroundTransparency = 1
+Content.ClipsDescendants = true
+Content.ZIndex = 8
+Content.Parent = MainFrame
+
+do
+	local veil = Instance.new("Frame")
+	veil.Name = "MotionVeil"
+	veil.Size = UDim2.fromScale(1, 1)
+	veil.BackgroundColor3 = Color3.fromRGB(3, 4, 10)
+	veil.BackgroundTransparency = 1
+	veil.BorderSizePixel = 0
+	veil.ClipsDescendants = true
+	veil.Visible = false
+	veil.Active = false
+	veil.ZIndex = 180
+	veil.Parent = MainFrame
+	Instance.new("UICorner", veil).CornerRadius = UDim.new(0, 12)
+	local art = Instance.new("ImageLabel")
+	art.Name = "MotionVeilArt"
+	art.Size = UDim2.fromScale(1.04, 1.04)
+	art.Position = UDim2.fromScale(-0.02, -0.02)
+	art.BackgroundTransparency = 1
+	art.BorderSizePixel = 0
+	art.Image = CONFIG.BackgroundAsset
+	art.ImageColor3 = Color3.fromRGB(164, 172, 218)
+	art.ImageTransparency = 1
+	art.ScaleType = Enum.ScaleType.Crop
+	art.ZIndex = 181
+	art.Parent = veil
+	Instance.new("UICorner", art).CornerRadius = UDim.new(0, 12)
+	State.motionVeil = veil
+	State.motionVeilArt = art
+end
+do
+	local shell = Instance.new("Frame")
+	shell.Name = "MotionShell"
+	shell.AnchorPoint = Vector2.new(0.5, 0.5)
+	shell.Size = UDim2.fromOffset(hubWidth, hubHeight)
+	shell.Position = UDim2.fromScale(0.5, 0.5)
+	shell.BackgroundColor3 = Color3.fromRGB(3, 4, 10)
+	shell.BackgroundTransparency = 0.02
+	shell.BorderSizePixel = 0
+	shell.ClipsDescendants = true
+	shell.Visible = false
+	shell.ZIndex = 90
+	shell.Parent = ScreenGui
+	local shellCorner = Instance.new("UICorner", shell)
+	shellCorner.CornerRadius = UDim.new(0, 12)
+	local art = Instance.new("ImageLabel")
+	art.Name = "MotionShellArt"
+	art.Size = UDim2.fromScale(1.04, 1.04)
+	art.Position = UDim2.fromScale(-0.02, -0.02)
+	art.BackgroundTransparency = 1
+	art.BorderSizePixel = 0
+	art.Image = CONFIG.BackgroundAsset
+	art.ImageColor3 = Color3.fromRGB(164, 172, 218)
+	art.ImageTransparency = 0.46
+	art.ScaleType = Enum.ScaleType.Crop
+	art.ZIndex = 91
+	art.Parent = shell
+	local artCorner = Instance.new("UICorner", art)
+	artCorner.CornerRadius = UDim.new(0, 12)
+	local shellStroke = Instance.new("UIStroke")
+	shellStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	shellStroke.Color = Color3.fromRGB(188, 158, 255)
+	shellStroke.Thickness = 1.5
+	shellStroke.Transparency = 0.12
+	shellStroke.LineJoinMode = Enum.LineJoinMode.Round
+	shellStroke.Parent = shell
+	State.motionShell = shell
+	State.motionShellArt = art
+	State.motionShellCorner = shellCorner
+	State.motionShellArtCorner = artCorner
+	State.motionShellStroke = shellStroke
+end
+
+local Pages = {}
+local TabButtons = {}
+local pageOrders = {}
+local MotionPageCache = Instance.new("Folder")
+MotionPageCache.Name = "0x"
+MotionPageCache.Parent = ScreenGui
+local MotionPageHomes = {}
+
+
+local function addRgbStroke(target, thickness, transparency)
+	local stroke = Instance.new("UIStroke")
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Thickness = thickness or 1
+	stroke.Transparency = math.clamp((transparency or 0.12) + 0.07, 0, 1)
+	stroke.Color = C.blue
+	stroke.Parent = target
+	return stroke
+end
+
+
+local function nextOrder(page)
+	pageOrders[page] = (pageOrders[page] or 0) + 1
+	return pageOrders[page]
+end
+
+
+State.pageScrollPositions = State.pageScrollPositions or {}
+local function refreshTabs(active)
+	local previous = State.currentTab
+	local changedPage = previous ~= nil and previous ~= active
+	if changedPage and previous and Pages[previous] then State.pageScrollPositions[previous] = Vector2.zero end
+	if changedPage then State.pageScrollPositions[active] = Vector2.zero end
+	State.currentTab = active
+	for name, button in pairs(TabButtons) do
+		local selected = name == active
+		button:SetAttribute("Selected", selected)
+		TweenService:Create(button, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			BackgroundTransparency = selected and 0.64 or 1,
+			BackgroundColor3 = selected and C.tabOn or C.tab,
+			TextColor3 = selected and C.white or C.soft,
+		}):Play()
+		local stroke = button:FindFirstChildOfClass("UIStroke")
+		if stroke then
+			TweenService:Create(stroke, TweenInfo.new(0.14), {
+				Color = selected and Color3.fromRGB(190, 150, 255) or C.blue,
+				Transparency = selected and 0.40 or 1,
+				Thickness = selected and 1.2 or 1,
+			}):Play()
+		end
+		local tabScale = button:FindFirstChild("TabScale")
+		if tabScale then
+			TweenService:Create(tabScale, TweenInfo.new(0.14, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+				Scale = selected and 1.018 or 1,
+			}):Play()
+		end
+		local activeLine = button:FindFirstChild("ActiveLine")
+		if activeLine then
+			activeLine.BackgroundColor3 = C.blue
+			TweenService:Create(activeLine, TweenInfo.new(0.16, Enum.EasingStyle.Quad), {
+				Size = selected and UDim2.new(1, -14, 0, 3) or UDim2.fromOffset(0, 3),
+				BackgroundTransparency = selected and 0 or 1,
+			}):Play()
+		end
+	end
+	for name, page in pairs(Pages) do
+		if name == active then
+			if page.Parent == MotionPageCache then
+				page.Parent = MotionPageHomes[page] or Content
+			end
+			page.CanvasPosition = State.pageScrollPositions[active] or Vector2.zero
+			page.Position = UDim2.fromOffset(7, 0)
+			page.Visible = true
+			TweenService:Create(page, TweenInfo.new(0.16, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+				Position = UDim2.fromOffset(0, 0),
+			}):Play()
+		else
+			page.Visible = false
+			if page.Parent ~= MotionPageCache then
+				MotionPageHomes[page] = page.Parent
+				page.Parent = MotionPageCache
+			end
+		end
+	end
+	task.defer(function()
+		local selectedButton = TabButtons[active]
+		if not selectedButton or not selectedButton.Parent or TabBar.AbsoluteSize.X <= 0 then return end
+		if State.tabScrollTween then
+			pcall(function()
+				State.tabScrollTween:Cancel()
+			end)
+			State.tabScrollTween = nil
+		end
+		local current = TabBar.CanvasPosition.X
+		local maximum = math.max(0, TabBar.AbsoluteCanvasSize.X - TabBar.AbsoluteSize.X)
+		local leftMargin = current > 4 and 16 or 6
+		local rightMargin = 6
+		local buttonLeft = selectedButton.AbsolutePosition.X - TabBar.AbsolutePosition.X + current
+		local buttonRight = buttonLeft + selectedButton.AbsoluteSize.X
+		local visibleLeft = current + leftMargin
+		local visibleRight = current + TabBar.AbsoluteSize.X - rightMargin
+		local target = current
+		if buttonLeft < visibleLeft then
+			target = buttonLeft - leftMargin
+		elseif buttonRight > visibleRight then
+			target = buttonRight - (TabBar.AbsoluteSize.X - rightMargin)
+		else
+			return
+		end
+		target = math.clamp(target, 0, maximum)
+		if math.abs(target - current) > 1 then
+			State.tabScrollTween = TweenService:Create(TabBar, TweenInfo.new(0.14, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+				CanvasPosition = Vector2.new(target, 0),
+			})
+			State.tabScrollTween:Play()
+		end
+	end)
+end
+
+
+local function addTab(text, width, order)
+	local page = Instance.new("ScrollingFrame")
+	page.Name = text
+	page.Size = UDim2.fromScale(1, 1)
+	page.BackgroundTransparency = 1
+	page.BorderSizePixel = 0
+	page.ScrollBarThickness = 3
+	page.ScrollBarImageColor3 = C.cyan
+	page.ScrollBarImageTransparency = 0.08
+	page.CanvasSize = UDim2.new()
+	page.Visible = false
+	page.ZIndex = 9
+	page.Parent = Content
+	Pages[text] = page
+	MotionPageHomes[page] = Content
+
+	local layout = Instance.new("UIListLayout", page)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, 3)
+
+	local padding = Instance.new("UIPadding", page)
+	padding.PaddingLeft = UDim.new(0, 8)
+	padding.PaddingRight = UDim.new(0, 8)
+	padding.PaddingTop = UDim.new(0, 7)
+	padding.PaddingBottom = UDim.new(0, 8)
+
+	track(layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		page.CanvasSize = UDim2.fromOffset(0, layout.AbsoluteContentSize.Y
+			+ (page:GetAttribute("TightCanvas") and 16 or 24))
+	end))
+
+	local button = Instance.new("TextButton")
+	button.Name = text
+	button.Size = UDim2.fromOffset(width, TAB_H - 8)
+	button.BackgroundColor3 = C.tab
+	button.BackgroundTransparency = 1
+	button.BorderSizePixel = 0
+	button.Text = text
+	button.TextColor3 = C.soft
+	button.Font = UI_FONT
+	button.TextSize = 11
+	button.TextWrapped = true
+	button.AutoButtonColor = false
+	button.LayoutOrder = order
+	button:SetAttribute("OutputHandled", true)
+	button.ZIndex = 12
+	button.Parent = TabBar
+	Instance.new("UICorner", button).CornerRadius = UDim.new(0, 7)
+	local tabScale = Instance.new("UIScale")
+	tabScale.Name = "TabScale"
+	tabScale.Scale = 1
+	tabScale.Parent = button
+
+	addRgbStroke(button, 1, 1)
+
+	local activeLine = Instance.new("Frame")
+	activeLine.Name = "ActiveLine"
+	activeLine.AnchorPoint = Vector2.new(0.5, 1)
+	activeLine.Size = UDim2.fromOffset(0, 2)
+	activeLine.Position = UDim2.new(0.5, 0, 1, -2)
+	activeLine.BackgroundColor3 = C.blue
+	activeLine.BackgroundTransparency = 1
+	activeLine.BorderSizePixel = 0
+	activeLine.ZIndex = 13
+	activeLine.Parent = button
+	Instance.new("UICorner", activeLine).CornerRadius = UDim.new(1, 0)
+
+	track(button.Activated:Connect(function()
+		State.pushOutput("TAB", text)
+		TweenService:Create(tabScale, TweenInfo.new(0.045, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+			Scale = 0.965,
+		}):Play()
+		task.delay(0.05, function()
+			if State.running and button.Parent then refreshTabs(text) end
+		end)
+	end))
+	track(button.MouseEnter:Connect(function()
+		if not button:GetAttribute("Selected") then
+			TweenService:Create(button, TweenInfo.new(0.1), {
+				BackgroundColor3 = Color3.fromRGB(29, 24, 48),
+				BackgroundTransparency = 0.80,
+			}):Play()
+			TweenService:Create(tabScale, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				Scale = 1.028,
+			}):Play()
+		end
+	end))
+	track(button.MouseLeave:Connect(function()
+		if not button:GetAttribute("Selected") then
+			TweenService:Create(button, TweenInfo.new(0.1), {
+				BackgroundColor3 = C.tab,
+				BackgroundTransparency = 1,
+			}):Play()
+			TweenService:Create(tabScale, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				Scale = 1,
+			}):Play()
+		end
+	end))
+	TabButtons[text] = button
+	return page
+end
+
+for index, tab in ipairs(CONFIG.Tabs) do
+	addTab(tab[1], tab[2], index)
+end
+
+track(tabLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+	TabBar.CanvasSize = UDim2.fromOffset(tabLayout.AbsoluteContentSize.X + 14, 0)
+end))
+track(UserInputService.InputChanged:Connect(function(input)
+	if input.UserInputType ~= Enum.UserInputType.MouseWheel or not TabBar.Visible then return end
+	local mouse = UserInputService:GetMouseLocation()
+	local position, size = TabBar.AbsolutePosition, TabBar.AbsoluteSize
+	if mouse.X < position.X or mouse.X > position.X + size.X
+		or mouse.Y < position.Y or mouse.Y > position.Y + size.Y then return end
+	local maximum = math.max(0, TabBar.AbsoluteCanvasSize.X - size.X)
+	local target = math.clamp(TabBar.CanvasPosition.X - input.Position.Z * 92, 0, maximum)
+	TabBar.CanvasPosition = Vector2.new(target, 0)
+end))
+
+do
+	local TabOverflow = Instance.new("TextButton")
+	TabOverflow.Name = "TabOverflow"
+	TabOverflow.Size = UDim2.fromOffset(24, TAB_H - 8)
+	TabOverflow.Position = UDim2.new(1, -24, 0, HEADER_H + 4)
+	TabOverflow.BackgroundColor3 = Color3.fromRGB(8, 9, 18)
+	TabOverflow.BackgroundTransparency = 1
+	TabOverflow.BorderSizePixel = 0
+	TabOverflow.Text = ""
+	TabOverflow.AutoButtonColor = false
+	TabOverflow.Active = true
+	TabOverflow.Selectable = true
+	TabOverflow.ZIndex = 24
+	TabOverflow.Visible = false
+	TabOverflow.Parent = MainFrame
+	Instance.new("UICorner", TabOverflow).CornerRadius = UDim.new(0, 7)
+	local overflowStroke = Instance.new("UIStroke")
+	overflowStroke.Color = C.blue
+	overflowStroke.Transparency = 1
+	overflowStroke.Parent = TabOverflow
+
+	local Fade = Instance.new("UIGradient")
+	Fade.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	Fade.Parent = TabOverflow
+
+	local Arrow = Instance.new("TextLabel")
+	Arrow.Size = UDim2.fromScale(1, 1)
+	Arrow.Position = UDim2.fromOffset(0, 0)
+	Arrow.BackgroundTransparency = 1
+	Arrow.Text = "›"
+	Arrow.TextColor3 = Color3.fromRGB(190, 150, 255)
+	Arrow.TextStrokeColor3 = Color3.fromRGB(4, 5, 12)
+	Arrow.TextStrokeTransparency = 0.34
+	Arrow.Font = Enum.Font.GothamBold
+	Arrow.TextSize = 26
+	Arrow.ZIndex = 25
+	Arrow.Parent = TabOverflow
+	Arrow:SetAttribute("KeepTextStyle", true)
+
+	track(TabOverflow.Activated:Connect(function()
+		local maximum = math.max(0, TabBar.AbsoluteCanvasSize.X - TabBar.AbsoluteSize.X)
+		local target = math.clamp(TabBar.CanvasPosition.X + math.max(110, TabBar.AbsoluteSize.X * 0.58), 0, maximum)
+		if State.tabScrollTween then pcall(State.tabScrollTween.Cancel, State.tabScrollTween) end
+		State.tabScrollTween = TweenService:Create(TabBar,
+			TweenInfo.new(0.18, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+				CanvasPosition = Vector2.new(target, 0),
+		})
+		State.tabScrollTween:Play()
+	end))
+	track(TabOverflow.MouseEnter:Connect(function()
+		TweenService:Create(Arrow, TweenInfo.new(0.10), {
+			TextColor3 = C.white,
+			TextStrokeTransparency = 0.18,
+		}):Play()
+	end))
+	track(TabOverflow.MouseLeave:Connect(function()
+		TweenService:Create(Arrow, TweenInfo.new(0.12), {
+			TextColor3 = Color3.fromRGB(190, 150, 255),
+			TextStrokeTransparency = 0.34,
+		}):Play()
+	end))
+
+	local TabUnderflow = Instance.new("TextButton")
+	TabUnderflow.Name = "TabUnderflow"
+	TabUnderflow.Size = UDim2.fromOffset(24, TAB_H - 8)
+	TabUnderflow.Position = UDim2.new(0, 0, 0, HEADER_H + 4)
+	TabUnderflow.BackgroundColor3 = Color3.fromRGB(8, 9, 18)
+	TabUnderflow.BackgroundTransparency = 1
+	TabUnderflow.BorderSizePixel = 0
+	TabUnderflow.Text = ""
+	TabUnderflow.AutoButtonColor = false
+	TabUnderflow.Active = true
+	TabUnderflow.Selectable = true
+	TabUnderflow.ZIndex = 24
+	TabUnderflow.Visible = false
+	TabUnderflow.Parent = MainFrame
+	Instance.new("UICorner", TabUnderflow).CornerRadius = UDim.new(0, 7)
+
+	local LeftArrow = Instance.new("TextLabel")
+	LeftArrow.Size = UDim2.fromScale(1, 1)
+	LeftArrow.BackgroundTransparency = 1
+	LeftArrow.Text = "‹"
+	LeftArrow.TextColor3 = Color3.fromRGB(190, 150, 255)
+	LeftArrow.TextStrokeColor3 = Color3.fromRGB(4, 5, 12)
+	LeftArrow.TextStrokeTransparency = 0.34
+	LeftArrow.Font = Enum.Font.GothamBold
+	LeftArrow.TextSize = 26
+	LeftArrow.ZIndex = 25
+	LeftArrow.Parent = TabUnderflow
+	LeftArrow:SetAttribute("KeepTextStyle", true)
+
+	track(TabUnderflow.Activated:Connect(function()
+		local target = math.max(0,
+			TabBar.CanvasPosition.X - math.max(110, (TabBar.AbsoluteSize.X + 24) * 0.58))
+		if State.tabScrollTween then pcall(State.tabScrollTween.Cancel, State.tabScrollTween) end
+		State.tabScrollTween = TweenService:Create(TabBar,
+			TweenInfo.new(0.18, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+				CanvasPosition = Vector2.new(target, 0),
+			})
+		State.tabScrollTween:Play()
+	end))
+	track(TabUnderflow.MouseEnter:Connect(function()
+		TweenService:Create(LeftArrow, TweenInfo.new(0.10), {
+			TextColor3 = C.white,
+			TextStrokeTransparency = 0.18,
+		}):Play()
+	end))
+	track(TabUnderflow.MouseLeave:Connect(function()
+		TweenService:Create(LeftArrow, TweenInfo.new(0.12), {
+			TextColor3 = Color3.fromRGB(190, 150, 255),
+			TextStrokeTransparency = 0.34,
+		}):Play()
+	end))
+
+
+	local function refreshOverflow()
+		local showLeft = TabBar.CanvasPosition.X > 4
+		if TabUnderflow.Visible ~= showLeft then
+			TabUnderflow.Visible = showLeft
+			TabBar.Position = UDim2.new(0, showLeft and 24 or 0, 0, HEADER_H)
+			TabBar.Size = UDim2.new(1, showLeft and -48 or -24, 0, TAB_H)
+		end
+		local maximum = math.max(0, tabLayout.AbsoluteContentSize.X + 14 - TabBar.AbsoluteSize.X)
+		TabOverflow.Visible = maximum > 5 and TabBar.CanvasPosition.X < maximum - 4
+	end
+	track(TabBar:GetPropertyChangedSignal("CanvasPosition"):Connect(refreshOverflow))
+	track(TabBar:GetPropertyChangedSignal("AbsoluteSize"):Connect(refreshOverflow))
+	track(tabLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		task.defer(refreshOverflow)
+	end))
+	task.defer(refreshOverflow)
+end
+
+
+local function addSection(page, text)
+	local section = Instance.new("Frame")
+	section.Size = UDim2.new(1, 0, 0, 22)
+	section.BackgroundTransparency = 1
+	section.BorderSizePixel = 0
+	section.LayoutOrder = nextOrder(page)
+	section.ZIndex = 11
+	section.Parent = page
+
+	local label = Instance.new("TextLabel")
+	label.AutomaticSize = Enum.AutomaticSize.X
+	label.Size = UDim2.fromOffset(0, 22)
+	label.BackgroundTransparency = 1
+	label.Text = text
+	label.TextColor3 = C.cyan
+	label.Font = C.fontBold
+	label.TextSize = 13
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.ZIndex = 11
+	label.Parent = section
+
+	local line = Instance.new("Frame")
+	line.AnchorPoint = Vector2.new(0, 0.5)
+	line.BackgroundColor3 = C.cyan
+	line.BackgroundTransparency = 0.3
+	line.BorderSizePixel = 0
+	line.ZIndex = 11
+	line.Parent = section
+	local gradient = Instance.new("UIGradient")
+	gradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.12),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	gradient.Parent = line
+	local function layoutSection()
+		if section.Parent and label.Parent then
+			local startX = math.ceil(label.TextBounds.X) + 10
+			line.Position = UDim2.new(0, startX, 0.5, 0)
+			line.Size = UDim2.new(1, -startX - 2, 0, 1)
+		end
+	end
+	track(label:GetPropertyChangedSignal("TextBounds"):Connect(layoutSection))
+	task.defer(layoutSection)
+	return label
+end
+
+
+local function styleRow(row, height)
+	row.Size = UDim2.new(1, 0, 0, height or 38)
+	row.BackgroundColor3 = C.row
+	row.BackgroundTransparency = 0.16
+	row.BorderSizePixel = 0
+	row.ZIndex = 11
+	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 11)
+	local stroke = addRgbStroke(row, 1, 0.30)
+    row:SetAttribute("SurfaceRow",true)
+    local surface=Instance.new("UIGradient",row)
+    surface.Name="Surface"; surface.Rotation=90
+    surface.Color=ColorSequence.new(Color3.new(1,1,1),Color3.fromRGB(218,218,225))
+	local topLine = Instance.new("Frame")
+	topLine.Name = "TopSheen"
+	topLine.Size = UDim2.new(1, -20, 0, 1)
+	topLine.Position = UDim2.fromOffset(10, 0)
+	topLine.BackgroundColor3 = C.white
+	topLine.BackgroundTransparency = 0.92
+	topLine.BorderSizePixel = 0
+	topLine.ZIndex = 12
+	topLine.Parent = row
+	Instance.new("UICorner", topLine).CornerRadius = UDim.new(1, 0)
+	local topLineGradient = Instance.new("UIGradient")
+	topLineGradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.5, 0),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	topLineGradient.Parent = topLine
+	return stroke
+end
+
+
+local function addInfoRow(page, labelText, valueText, color, showIndicator, showAccent)
+	local row = Instance.new("Frame")
+	row.LayoutOrder = nextOrder(page)
+	row.Parent = page
+	styleRow(row, 34)
+	if showAccent then
+		local accent = Instance.new("Frame")
+		accent.Size = UDim2.fromOffset(3, 20)
+		accent.Position = UDim2.new(0, 8, 0.5, -10)
+		accent.BackgroundColor3 = C.cyan
+		accent.BackgroundTransparency = 0.1
+		accent.BorderSizePixel = 0
+		accent.ZIndex = 12
+		accent.Parent = row
+		Instance.new("UICorner", accent).CornerRadius = UDim.new(1, 0)
+	end
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(0.42, -10, 1, 0)
+	label.Position = UDim2.fromOffset(showAccent and 20 or 11, 0)
+	label.BackgroundTransparency = 1
+	label.Text = labelText
+	label.TextColor3 = C.dim
+	label.Font = UI_FONT
+	label.TextSize = 12
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.ZIndex = 12
+	label.Parent = row
+
+	local value = Instance.new("TextLabel")
+	value.Size = UDim2.new(0.58, -12, 1, 0)
+	value.Position = UDim2.new(0.42, 0, 0, 0)
+	if showIndicator then
+		value.Size = UDim2.new(0.58, -30, 1, 0)
+	end
+	value.BackgroundTransparency = 1
+	value.Text = tostring(valueText or "-")
+	value.TextColor3 = color or C.white
+	value.Font = UI_FONT
+	value.TextSize = 12
+	value.TextWrapped = true
+	value.TextXAlignment = Enum.TextXAlignment.Right
+	value.ZIndex = 12
+	value.Parent = row
+
+	local indicator
+	if showIndicator then
+		indicator = Instance.new("Frame")
+		indicator.Name = "StatusDot"
+		indicator.AnchorPoint = Vector2.new(0.5, 0.5)
+		indicator.Size = UDim2.fromOffset(7, 7)
+		indicator.Position = UDim2.new(1, -13, 0.5, 0)
+		indicator.BackgroundColor3 = color or C.green
+		indicator.BorderSizePixel = 0
+		indicator.ZIndex = 13
+		indicator.Parent = row
+		Instance.new("UICorner", indicator).CornerRadius = UDim.new(1, 0)
+		local glow = Instance.new("UIStroke", indicator)
+		glow.Color = color or C.green
+		glow.Thickness = 2
+		glow.Transparency = 0.58
+	end
+	return value, row, label, indicator
+end
+
+local function addStatusRow(page, text)
+	local value = addInfoRow(page, "Estado", text, C.green)
+	return value
+end
+
+
+State.registerProfileControl = function(page, titleText, kind, controller)
+	if not page or page.Name == "Perfiles" or type(controller) ~= "table" then return end
+	local base = tostring(page.Name) .. "|" .. tostring(titleText)
+	local key = base
+	local suffix = 2
+	while State.profileControls[key] do
+		key = base .. "|" .. tostring(suffix)
+		suffix = suffix + 1
+	end
+	controller.ProfileKind = kind
+	controller.ProfileKey = key
+	State.profileControls[key] = controller
+end
+
+
+local function addButton(page, text, callback, color, hoverColor)
+	local button = Instance.new("TextButton")
+	button.LayoutOrder = nextOrder(page)
+	button.Text = text
+	button.TextColor3 = C.white
+	button.Font = UI_FONT
+	button.TextSize = 12
+	button.AutoButtonColor = false
+	button:SetAttribute("OutputHandled", true)
+	button.Parent = page
+	local stroke = styleRow(button, 38)
+	button.BackgroundColor3 = color or C.row
+
+	track(button.Activated:Connect(function()
+		if button:GetAttribute("Disabled") == true then return end
+		State.pushOutput("CLICK", text)
+		if hoverColor then
+			button.BackgroundColor3 = hoverColor
+		end
+		local ok,err=pcall(callback,button)
+		if not ok then State.pushOutput("ERROR",text..": "..tostring(err):sub(1,240)) end
+	end))
+	track(button.MouseEnter:Connect(function()
+		if button:GetAttribute("Disabled") == true then return end
+		TweenService:Create(button, TweenInfo.new(0.1), { BackgroundColor3 = hoverColor or C.rowHover }):Play()
+		TweenService:Create(stroke, TweenInfo.new(0.1), { Transparency = 0.18, Color = C.cyan }):Play()
+	end))
+	track(button.MouseLeave:Connect(function()
+		if button:GetAttribute("Disabled") == true then
+			button.BackgroundColor3 = Color3.fromRGB(30, 33, 40)
+			return
+		end
+		TweenService:Create(button, TweenInfo.new(0.1), { BackgroundColor3 = color or C.row }):Play()
+		TweenService:Create(stroke, TweenInfo.new(0.1), { Transparency = 0.4, Color = C.blue }):Play()
+	end))
+	return button
+end
+
+
+State.setButtonDisabled = function(button, disabled)
+	if not button then return end
+	disabled = disabled == true
+	button:SetAttribute("Disabled", disabled)
+	button.Active = not disabled
+	button.Selectable = not disabled
+	button.BackgroundColor3 = disabled and Color3.fromRGB(30, 33, 40) or C.row
+	button.TextColor3 = disabled and C.dim or C.white
+	button.TextTransparency = disabled and 0.38 or 0
+	local stroke = button:FindFirstChildOfClass("UIStroke")
+	if stroke then
+		stroke.Color = disabled and C.dim or C.blue
+		stroke.Transparency = disabled and 0.82 or 0.4
+	end
+end
+
+
+do
+	local infoPage = Pages["Info"]
+
+	if infoPage then
+		addSection(infoPage, "👤 Info Player 👤")
+
+		addInfoRow(infoPage, "User:", LP.DisplayName, C.white)
+
+		local fpsValue = addInfoRow(
+			infoPage,
+			"FPS:",
+			"0",
+			C.green,
+			true
+		)
+
+		local initialPing = getPing()
+		local pingValue = addInfoRow(
+			infoPage,
+			"Ping:",
+			tostring(initialPing) .. " ms",
+			State.pingStatusColor(initialPing),
+			true
+		)
+
+		addSection(infoPage, "🌐 Server Info 🌐")
+
+		addInfoRow(
+			infoPage,
+			"Game:",
+			"Rivals",
+			C.soft,
+			false,
+			false
+		)
+
+		local serverPlayersValue = addInfoRow(
+			infoPage,
+			"Server Players:",
+			"0/0",
+			C.white
+		)
+
+		addSection(infoPage, "⚡ Info Tpm Hub ⚡")
+
+		addInfoRow(
+			infoPage,
+			"Script:",
+			"Tus Putos muertos",
+			C.cyan
+		)
+
+		addInfoRow(
+			infoPage,
+			"Autor:",
+			"Nobody",
+			C.white
+		)
+
+		addButton(infoPage, "Discord", function(button)
+			local original = button.Text
+
+			button.Text = copyText(DISCORD_LINK)
+				and "Link copiado"
+				or "Error al copiar"
+
+			task.delay(1.1, function()
+				if button and button.Parent then
+					button.Text = original
+				end
+			end)
+		end)
+
+		-- Actualización en vivo de FPS, Ping y jugadores del servidor
+		task.spawn(function()
+			local frames = 0
+			local last = os.clock()
+			while State.running and infoPage.Parent do
+				RunService.Heartbeat:Wait()
+				frames += 1
+				local now = os.clock()
+				if now - last >= 0.5 then
+					local fps = math.floor(frames / (now - last) + 0.5)
+					frames = 0
+					last = now
+					fpsValue.Text = tostring(fps)
+					local ping = getPing()
+					pingValue.Text = tostring(ping) .. " ms"
+					pingValue.TextColor3 = State.pingStatusColor(ping)
+				end
+				serverPlayersValue.Text = tostring(#Players:GetPlayers()) .. "/" .. tostring(Players.MaxPlayers)
+			end
+		end)
+	end
+end
+
+
+local function addToggle(page, text, callback)
+	local button = Instance.new("TextButton")
+	button.LayoutOrder = nextOrder(page)
+	button.Text = ""
+	button.AutoButtonColor = false
+	button:SetAttribute("OutputHandled", true)
+	button.Parent = page
+	local stroke = styleRow(button, 40)
+
+	local accent = Instance.new("Frame")
+	accent.Size = UDim2.fromOffset(3, 24)
+	accent.Position = UDim2.new(0, 8, 0.5, -12)
+	accent.BackgroundColor3 = C.cyan
+	accent.BackgroundTransparency = 0.1
+	accent.BorderSizePixel = 0
+	accent.ZIndex = 12
+	accent.Parent = button
+	Instance.new("UICorner", accent).CornerRadius = UDim.new(1, 0)
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, -72, 1, 0)
+	label.Position = UDim2.fromOffset(20, 0)
+	label.BackgroundTransparency = 1
+	label.Text = text
+	label.TextColor3 = C.white
+	label.Font = UI_FONT
+	label.TextSize = 12
+	label.TextWrapped = true
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.ZIndex = 12
+	label.Parent = button
+
+	local pill = Instance.new("Frame")
+	pill.Size = UDim2.fromOffset(40, 20)
+	pill.Position = UDim2.new(1, -50, 0.5, -10)
+	pill.BackgroundColor3 = Color3.fromRGB(38, 43, 54)
+	pill.BackgroundTransparency = 0.12
+	pill.BorderSizePixel = 0
+	pill.ZIndex = 12
+	pill.Parent = button
+	Instance.new("UICorner", pill).CornerRadius = UDim.new(1, 0)
+
+	local knob = Instance.new("Frame")
+	knob.Size = UDim2.fromOffset(14, 14)
+	knob.Position = UDim2.fromOffset(3, 3)
+	knob.BackgroundColor3 = C.soft
+	knob.BorderSizePixel = 0
+	knob.ZIndex = 13
+	knob.Parent = pill
+	Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+	local state = false
+	local locked = false
+	local frozen = false
+	local controller = {}
+	controller.Button = button
+
+	local function render()
+		local disabled = locked or frozen
+		TweenService:Create(pill, TweenInfo.new(0.14, Enum.EasingStyle.Quad), {
+			BackgroundColor3 = disabled and Color3.fromRGB(41, 44, 52)
+				or (state and C.cyan or Color3.fromRGB(38, 43, 54)),
+		}):Play()
+		TweenService:Create(knob, TweenInfo.new(0.14, Enum.EasingStyle.Quad), {
+			Position = state and UDim2.fromOffset(23, 3) or UDim2.fromOffset(3, 3),
+			BackgroundColor3 = state and C.white or C.soft,
+			BackgroundTransparency = disabled and 0.48 or 0,
+		}):Play()
+		TweenService:Create(stroke, TweenInfo.new(0.14), {
+			Color = disabled and C.dim or (state and C.cyan or C.blue),
+			Transparency = disabled and 0.82 or (state and 0.08 or 0.4),
+		}):Play()
+		TweenService:Create(label, TweenInfo.new(0.14), {
+			TextColor3 = disabled and C.dim or C.white,
+			TextTransparency = disabled and 0.42 or 0,
+		}):Play()
+		TweenService:Create(accent, TweenInfo.new(0.14), {
+			BackgroundTransparency = disabled and 0.72 or 0.1,
+		}):Play()
+		TweenService:Create(button, TweenInfo.new(0.14), {
+			BackgroundTransparency = disabled and 0.48 or 0.1,
+		}):Play()
+	end
+
+
+	function controller:Set(value, silent)
+		value = value == true
+		if locked and value then
+			return false
+		end
+		if state == value then
+			return state
+		end
+		state = value
+		local requested = value
+		if not silent then
+			local ok, accepted = pcall(callback, state)
+			if not ok or accepted == false then
+				state = not state
+			end
+		end
+		render()
+		if not silent then
+			State.pushOutput(state == requested and (state and "ON" or "OFF") or "ERROR",
+				state == requested and text or ("Acción rechazada: " .. text))
+		end
+		return state
+	end
+
+
+	function controller:Get()
+		return state
+	end
+
+
+	function controller:SetLocked(value)
+		locked = value == true
+		if locked and state then
+			state = false
+			pcall(callback, false)
+		end
+		render()
+	end
+
+
+	function controller:SetFrozen(value)
+		frozen = value == true
+		button.Active = not frozen
+		button.Selectable = not frozen
+		render()
+	end
+
+
+	function controller:IsFrozen()
+		return frozen
+	end
+
+
+	function controller:IsLocked()
+		return locked
+	end
+
+	track(button.Activated:Connect(function()
+		if not locked and not frozen then
+			controller:Set(not state)
+		end
+	end))
+	track(button.MouseEnter:Connect(function()
+		if not locked and not frozen then
+			TweenService:Create(button, TweenInfo.new(0.1), { BackgroundColor3 = C.rowHover }):Play()
+		end
+	end))
+	track(button.MouseLeave:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.1), { BackgroundColor3 = C.row }):Play()
+	end))
+	render()
+	State.allToggleControllers[#State.allToggleControllers + 1] = controller
+	State.registerProfileControl(page, text, "toggle", controller)
+	return controller, button
+end
+
+State.activeSelector = nil
+
+
+local function addSelector(page, titleText, values, callback, openCallback, placeholder)
+	local row = Instance.new("Frame")
+	local selectorName = tostring(titleText or "Selector"):gsub("[^%w]+", "")
+	row.Name = "Selector_" .. (selectorName ~= "" and selectorName or "Value")
+	row.LayoutOrder = nextOrder(page)
+	row.Parent = page
+	row.ClipsDescendants = true
+	styleRow(row, 46)
+
+	local headerButton = Instance.new("TextButton")
+	headerButton.Name = "Header"
+	headerButton.Size = UDim2.new(1, 0, 0, 46)
+	headerButton.BackgroundTransparency = 1
+	headerButton.BorderSizePixel = 0
+	headerButton.Text = ""
+	headerButton.AutoButtonColor = false
+	headerButton:SetAttribute("OutputHandled", true)
+	headerButton.ZIndex = 13
+	headerButton.Parent = row
+
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(0.42, -12, 1, 0)
+	title.Position = UDim2.fromOffset(11, 0)
+	title.BackgroundTransparency = 1
+	title.Text = titleText
+	title.TextColor3 = C.soft
+	title.Font = UI_FONT
+	title.TextSize = 11
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.ZIndex = 14
+	title.Parent = headerButton
+
+	local valueLabel = Instance.new("TextLabel")
+	valueLabel.Size = UDim2.new(0.58, -34, 1, 0)
+	valueLabel.Position = UDim2.new(0.42, 0, 0, 0)
+	valueLabel.BackgroundTransparency = 1
+	valueLabel.TextColor3 = C.white
+	valueLabel.Font = UI_FONT
+	valueLabel.TextSize = 11
+	valueLabel.TextWrapped = true
+	valueLabel.TextXAlignment = Enum.TextXAlignment.Right
+	valueLabel.ZIndex = 14
+	valueLabel.Parent = headerButton
+
+	local arrow = Instance.new("Frame")
+	arrow.AnchorPoint = Vector2.new(0.5, 0.5)
+	arrow.Size = UDim2.fromOffset(18, 18)
+	arrow.Position = UDim2.new(1, -19, 0.5, 0)
+	arrow.BackgroundTransparency = 1
+	arrow.ZIndex = 14
+	arrow.Parent = headerButton
+	local arrowLeft = Instance.new("Frame")
+	arrowLeft.AnchorPoint = Vector2.new(1, 0.5)
+	arrowLeft.Size = UDim2.fromOffset(8, 2)
+	arrowLeft.Position = UDim2.new(0.5, 1, 0.5, 1)
+	arrowLeft.Rotation = 45
+	arrowLeft.BackgroundColor3 = C.cyan
+	arrowLeft.BorderSizePixel = 0
+	arrowLeft.ZIndex = 15
+	arrowLeft.Parent = arrow
+	Instance.new("UICorner", arrowLeft).CornerRadius = UDim.new(1, 0)
+	local arrowRight = Instance.new("Frame")
+	arrowRight.AnchorPoint = Vector2.new(0, 0.5)
+	arrowRight.Size = UDim2.fromOffset(8, 2)
+	arrowRight.Position = UDim2.new(0.5, -1, 0.5, 1)
+	arrowRight.Rotation = -45
+	arrowRight.BackgroundColor3 = C.cyan
+	arrowRight.BorderSizePixel = 0
+	arrowRight.ZIndex = 15
+	arrowRight.Parent = arrow
+	Instance.new("UICorner", arrowRight).CornerRadius = UDim.new(1, 0)
+
+	local optionsFrame = Instance.new("ScrollingFrame")
+	optionsFrame.Name = "Options"
+	optionsFrame.Size = UDim2.new(1, -12, 0, 0)
+	optionsFrame.Position = UDim2.fromOffset(6, 46)
+	optionsFrame.BackgroundColor3 = C.base
+	optionsFrame.BackgroundTransparency = 0.12
+	optionsFrame.BorderSizePixel = 0
+	optionsFrame.ScrollBarThickness = 2
+	optionsFrame.ScrollBarImageColor3 = C.cyan
+	optionsFrame.CanvasSize = UDim2.new()
+	optionsFrame.Visible = false
+	optionsFrame.ZIndex = 14
+	optionsFrame.Parent = row
+	Instance.new("UICorner", optionsFrame).CornerRadius = UDim.new(0, 6)
+
+	local optionsLayout = Instance.new("UIListLayout", optionsFrame)
+	optionsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	optionsLayout.Padding = UDim.new(0, 2)
+
+	local optionsPadding = Instance.new("UIPadding", optionsFrame)
+	optionsPadding.PaddingTop = UDim.new(0, 3)
+	optionsPadding.PaddingBottom = UDim.new(0, 3)
+	optionsPadding.PaddingLeft = UDim.new(0, 3)
+	optionsPadding.PaddingRight = UDim.new(0, 3)
+
+	local data = { values = values or {}, index = 1, open = false, placeholder = placeholder }
+	local optionConnections = {}
+
+	local function disconnectOptionConnections()
+		for _, connection in ipairs(optionConnections) do
+			pcall(connection.Disconnect, connection)
+		end
+		table.clear(optionConnections)
+	end
+
+	local function connectOption(signal, handler)
+		local connection = signal:Connect(handler)
+		optionConnections[#optionConnections + 1] = connection
+		return connection
+	end
+	if data.placeholder then
+		data.index = 0
+	end
+
+	local function display(value)
+		return value and tostring(type(value) == "table" and (value.label or value.name or value[1]) or value)
+			or data.placeholder
+			or "Sin opciones"
+	end
+
+	local function selected()
+		return data.values[data.index]
+	end
+
+	local function render(fireCallback)
+		local value = selected()
+		valueLabel.Text = display(value)
+		if fireCallback and callback then
+			pcall(callback, value)
+		end
+	end
+
+	local function setOpen(open)
+		if open == true and State.activeSelector and State.activeSelector ~= data then
+			State.activeSelector:SetOpen(false)
+		end
+		data.open = open == true and #data.values > 0
+		if data.open then
+			State.activeSelector = data
+		elseif State.activeSelector == data then
+			State.activeSelector = nil
+		end
+		local optionHeight = math.min(#data.values, 5) * 30 + 6
+		optionsFrame.Visible = data.open
+		optionsFrame.Size = UDim2.new(1, -12, 0, data.open and optionHeight or 0)
+		row.Size = UDim2.new(1, 0, 0, 46 + (data.open and optionHeight or 0))
+		if data.open and page:IsA("ScrollingFrame") then
+			task.defer(function()
+				RunService.Heartbeat:Wait()
+				if not data.open or not page.Parent or not row.Parent then return end
+				local viewTop = page.AbsolutePosition.Y + 6
+				local viewBottom = page.AbsolutePosition.Y + page.AbsoluteSize.Y - 6
+				local rowTop = row.AbsolutePosition.Y
+				local optionsBottom = optionsFrame.AbsolutePosition.Y + optionsFrame.AbsoluteSize.Y
+				local delta = 0
+				if optionsBottom > viewBottom then
+					delta = optionsBottom - viewBottom
+				elseif rowTop < viewTop then
+					delta = rowTop - viewTop
+				end
+				if math.abs(delta) > 0.5 then
+					local maximum = math.max(0, page.AbsoluteCanvasSize.Y - page.AbsoluteSize.Y)
+					local targetY = math.clamp(page.CanvasPosition.Y + delta, 0, maximum)
+					TweenService:Create(page, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+						CanvasPosition = Vector2.new(page.CanvasPosition.X, targetY),
+					}):Play()
+				end
+			end)
+		end
+		if data.open and openCallback then
+			task.defer(openCallback, row)
+		end
+		TweenService:Create(arrow, TweenInfo.new(0.12, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			Rotation = data.open and 180 or 0,
+		}):Play()
+	end
+
+	local function rebuildOptions()
+		disconnectOptionConnections()
+		for _, child in ipairs(optionsFrame:GetChildren()) do
+			if child:IsA("TextButton") then
+				child:Destroy()
+			end
+		end
+		for index, value in ipairs(data.values) do
+			local option = Instance.new("TextButton")
+			option.Size = UDim2.new(1, -6, 0, 28)
+			option.BackgroundColor3 = index == data.index and C.tabOn or C.row
+			option.BackgroundTransparency = index == data.index and 0.08 or 0.22
+			option.BorderSizePixel = 0
+			option.Text = display(value)
+			option.TextColor3 = C.white
+			option.Font = UI_FONT
+			option.TextSize = 11
+			option.TextWrapped = true
+			option.AutoButtonColor = false
+			option:SetAttribute("OutputHandled", true)
+			option.LayoutOrder = index
+			option.ZIndex = 15
+			option.Parent = optionsFrame
+			styleHubText(option)
+			Instance.new("UICorner", option).CornerRadius = UDim.new(0, 5)
+			addRgbStroke(option, 1, 0.28)
+			connectOption(option.Activated, function()
+				data.index = index
+				State.pushOutput("SELECT", tostring(titleText) .. ": " .. display(value))
+				render(true)
+				setOpen(false)
+				rebuildOptions()
+			end)
+			connectOption(option.MouseEnter, function()
+				TweenService:Create(option, TweenInfo.new(0.08), {
+					BackgroundColor3 = index == data.index and C.tabOn or C.rowHover,
+					BackgroundTransparency = 0.06,
+				}):Play()
+			end)
+			connectOption(option.MouseLeave, function()
+				TweenService:Create(option, TweenInfo.new(0.08), {
+					BackgroundColor3 = index == data.index and C.tabOn or C.row,
+					BackgroundTransparency = index == data.index and 0.08 or 0.22,
+				}):Play()
+			end)
+		end
+		optionsFrame.CanvasSize = UDim2.fromOffset(0, #data.values * 30 + 6)
+	end
+
+
+	function data:Get()
+		return selected()
+	end
+
+
+	function data:SetValues(newValues, preserve)
+		local old = preserve and selected() or nil
+		data.values = newValues or {}
+		data.index = 1
+		if data.placeholder then
+			data.index = 0
+		end
+		if old then
+			for index, value in ipairs(data.values) do
+				local same = value == old
+				if type(value) == "table" and type(old) == "table" then
+					same = (value.userId and value.userId == old.userId)
+						or (value.name and value.name == old.name)
+				end
+				if same then
+					data.index = index
+					break
+				end
+			end
+		end
+		rebuildOptions()
+		setOpen(false)
+		render(true)
+	end
+
+
+	function data:SetIndex(index)
+		if #data.values == 0 then
+			data.index = data.placeholder and 0 or 1
+		else
+			data.index = ((index - 1) % #data.values) + 1
+		end
+		rebuildOptions()
+		setOpen(false)
+		render(true)
+	end
+
+
+	function data:Clear()
+		if not data.placeholder then return end
+		data.index = 0
+		rebuildOptions()
+		setOpen(false)
+		render(false)
+	end
+
+
+	function data:SetValue(target)
+		for index, value in ipairs(data.values) do
+			local comparable = value
+			if type(value) == "table" then
+				comparable = value.profileValue or value.name or value.label or value[1]
+			end
+			if comparable == target then
+				self:SetIndex(index)
+				return true
+			end
+		end
+		return false
+	end
+
+
+	function data:SetOpen(value)
+		setOpen(value)
+		return data.open
+	end
+
+
+	function data:IsOpen()
+		return data.open
+	end
+	data.Page = page
+	data.Row = row
+
+	track(headerButton.Activated:Connect(function()
+		State.pushOutput("CLICK", (data.open and "Cerrar selector: " or "Abrir selector: ") .. tostring(titleText))
+		setOpen(not data.open)
+	end))
+	track(headerButton.MouseEnter:Connect(function()
+		TweenService:Create(row, TweenInfo.new(0.1), { BackgroundColor3 = C.rowHover }):Play()
+	end))
+	track(headerButton.MouseLeave:Connect(function()
+		TweenService:Create(row, TweenInfo.new(0.1), { BackgroundColor3 = C.row }):Play()
+	end))
+	addCleanup(disconnectOptionConnections)
+	rebuildOptions()
+	render(true)
+	State.selectorControllers[#State.selectorControllers + 1] = data
+	State.registerProfileControl(page, titleText, "selector", data)
+	return data, valueLabel
+end
+
+track(UserInputService.InputBegan:Connect(function(input)
+	if input.UserInputType ~= Enum.UserInputType.MouseButton1
+		and input.UserInputType ~= Enum.UserInputType.Touch then
+		return
+	end
+	local selector = State.activeSelector
+	if not selector or not selector:IsOpen() then return end
+	local row = selector.Row
+	if not row or not row.Parent or not row.Visible then
+		selector:SetOpen(false)
+		return
+	end
+	local point = input.Position
+	local position = row.AbsolutePosition
+	local size = row.AbsoluteSize
+	local inside = point.X >= position.X and point.X <= position.X + size.X
+		and point.Y >= position.Y and point.Y <= position.Y + size.Y
+	if not inside then selector:SetOpen(false) end
+end))
+
+
+local function addInput(page, titleText, placeholder, callback, skipProfile)
+	local row = Instance.new("Frame")
+	row.LayoutOrder = nextOrder(page)
+	row.Parent = page
+	styleRow(row, 48)
+
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(0.42, -12, 1, 0)
+	title.Position = UDim2.fromOffset(11, 0)
+	title.BackgroundTransparency = 1
+	title.Text = titleText
+	title.TextColor3 = C.soft
+	title.Font = UI_FONT
+	title.TextSize = 12
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.ZIndex = 12
+	title.Parent = row
+
+	local input = Instance.new("TextBox")
+	input.Size = UDim2.new(0.58, -12, 0, 30)
+	input.Position = UDim2.new(0.42, 0, 0.5, -15)
+	input.BackgroundColor3 = C.panel
+	input.BackgroundTransparency = 0.08
+	input.BorderSizePixel = 0
+	input.PlaceholderText = placeholder
+	input.PlaceholderColor3 = C.dim
+	input.Text = ""
+	input.TextColor3 = C.white
+	input.Font = UI_FONT
+	input.TextSize = 12
+	input.ClearTextOnFocus = false
+	input.ZIndex = 12
+	input.Parent = row
+	Instance.new("UICorner", input).CornerRadius = UDim.new(0, 6)
+
+	track(input.FocusLost:Connect(function()
+		State.pushOutput("INPUT", tostring(titleText) .. ": " .. tostring(input.Text))
+		pcall(callback, input.Text)
+	end))
+	local profileInput = {}
+
+	function profileInput:Get()
+		return input.Text
+	end
+
+	function profileInput:Set(value)
+		input.Text = tostring(value or "")
+		pcall(callback, input.Text)
+		return input.Text
+	end
+	if not skipProfile then State.registerProfileControl(page, titleText, "input", profileInput) end
+	return input
+end
+
+
+local function addSlider(page, titleText, minimum, maximum, initial, callback)
+	local row = Instance.new("Frame")
+	row.LayoutOrder = nextOrder(page)
+	row.Parent = page
+	styleRow(row, 50)
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, -20, 0, 20)
+	label.Position = UDim2.fromOffset(10, 2)
+	label.BackgroundTransparency = 1
+	label.TextColor3 = C.white
+	label.Font = UI_FONT
+	label.TextSize = 12
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.ZIndex = 12
+	label.Parent = row
+
+	local trackBar = Instance.new("TextButton")
+	trackBar.Size = UDim2.new(1, -20, 0, 10)
+	trackBar.Position = UDim2.fromOffset(10, 31)
+	trackBar.BackgroundColor3 = Color3.fromRGB(38, 43, 54)
+	trackBar.BorderSizePixel = 0
+	trackBar.Text = ""
+	trackBar.AutoButtonColor = false
+	trackBar:SetAttribute("OutputHandled", true)
+	trackBar.ZIndex = 12
+	trackBar.Parent = row
+	Instance.new("UICorner", trackBar).CornerRadius = UDim.new(1, 0)
+
+	local fill = Instance.new("Frame")
+	fill.Size = UDim2.fromScale(0, 1)
+	fill.BackgroundColor3 = C.cyan
+	fill.BorderSizePixel = 0
+	fill.ZIndex = 13
+	fill.Parent = trackBar
+	Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+
+	local value = math.clamp(math.floor(initial), minimum, maximum)
+	local draggingSlider = false
+
+	local function setValue(newValue)
+		value = math.clamp(math.floor(newValue + 0.5), minimum, maximum)
+		local alpha = (value - minimum) / (maximum - minimum)
+		label.Text = titleText .. ": " .. value .. "/" .. maximum
+		TweenService:Create(fill, TweenInfo.new(0.08), { Size = UDim2.fromScale(alpha, 1) }):Play()
+		pcall(callback, value)
+	end
+
+	local function updateFromX(x)
+		local alpha = math.clamp((x - trackBar.AbsolutePosition.X) / math.max(trackBar.AbsoluteSize.X, 1), 0, 1)
+		setValue(minimum + (maximum - minimum) * alpha)
+	end
+
+	track(trackBar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			draggingSlider = true
+			updateFromX(input.Position.X)
+		end
+	end))
+	track(UserInputService.InputChanged:Connect(function(input)
+		if draggingSlider and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			updateFromX(input.Position.X)
+		end
+	end))
+	track(UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			if draggingSlider then State.pushOutput("SLIDER", tostring(titleText) .. ": " .. tostring(value)) end
+			draggingSlider = false
+		end
+	end))
+	setValue(value)
+	local controller = {}
+
+	function controller:Get()
+		return value
+	end
+
+	function controller:Set(newValue)
+		setValue(tonumber(newValue) or value)
+		return value
+	end
+	State.registerProfileControl(page, titleText, "slider", controller)
+	return controller
+end
+State.ThemePresets = {
+	Violeta = { base = Color3.fromRGB(10, 6, 20), panel = Color3.fromRGB(20, 12, 37), row = Color3.fromRGB(31, 20, 50), rowHover = Color3.fromRGB(47, 29, 73), tab = Color3.fromRGB(24, 14, 42), tabOn = Color3.fromRGB(52, 31, 82), cyan = Color3.fromRGB(190, 142, 255), blue = Color3.fromRGB(139, 104, 255), green = Color3.fromRGB(126, 224, 175), yellow = Color3.fromRGB(240, 207, 121), orange = Color3.fromRGB(240, 146, 105), red = Color3.fromRGB(255, 76, 116), white = Color3.fromRGB(250, 247, 255), soft = Color3.fromRGB(230, 220, 244), dim = Color3.fromRGB(169, 153, 190), black = Color3.fromRGB(0, 0, 0), art = Color3.fromRGB(222, 190, 255) },
+	Galaxia = { base = Color3.fromRGB(6, 8, 17), panel = Color3.fromRGB(11, 15, 27), row = Color3.fromRGB(19, 24, 39), rowHover = Color3.fromRGB(29, 37, 58), tab = Color3.fromRGB(13, 18, 31), tabOn = Color3.fromRGB(28, 39, 65), cyan = Color3.fromRGB(105, 205, 255), blue = Color3.fromRGB(159, 139, 246), green = Color3.fromRGB(126, 224, 175), yellow = Color3.fromRGB(238, 206, 111), orange = Color3.fromRGB(236, 159, 93), red = Color3.fromRGB(255, 55, 82), white = Color3.fromRGB(246, 248, 252), soft = Color3.fromRGB(225, 230, 239), dim = Color3.fromRGB(165, 174, 189), black = Color3.fromRGB(0, 0, 0), art = Color3.fromRGB(204, 211, 255) },
+}
+local function themeColorKey(color)
+	return string.format("%d,%d,%d", math.floor(color.R * 255 + 0.5), math.floor(color.G * 255 + 0.5), math.floor(color.B * 255 + 0.5))
+end
+State.applyTheme = function(name, quiet)
+	local preset = State.ThemePresets[name]
+	if not preset then return false end
+	local old = {}
+	for role, color in pairs(C) do if typeof(color) == "Color3" then old[themeColorKey(color)] = role end end
+	for _, object in ipairs(ScreenGui:GetDescendants()) do
+		for _, property in ipairs({ "BackgroundColor3", "TextColor3", "ImageColor3", "ScrollBarImageColor3" }) do
+			pcall(function() local role = old[themeColorKey(object[property])]; if role and preset[role] then object[property] = preset[role] end end)
+		end
+		if object:IsA("UIStroke") then local role = old[themeColorKey(object.Color)]; if role and preset[role] then object.Color = preset[role] end end
+	end
+	for role, color in pairs(preset) do if role ~= "art" then C[role] = color end end
+	MainFrame.BackgroundColor3 = C.base
+	TabBar.BackgroundColor3 = C.base
+	MiniBubble.BackgroundColor3 = C.panel
+	local art = MainFrame:FindFirstChild("BackgroundArt")
+	if art then art.ImageColor3 = preset.art end
+	local stars = MiniBubble:FindFirstChild("Stars")
+	if stars then stars.ImageColor3 = preset.art end
+	if State.motionShell then State.motionShell.BackgroundColor3 = C.base end
+	if State.motionShellArt then State.motionShellArt.ImageColor3 = preset.art end
+	State.themeName = name
+	ScreenGui:SetAttribute("Theme", name)
+	if State.currentTab then refreshTabs(State.currentTab) end
+	if not quiet then State.pushOutput("THEME", "Tema aplicado: " .. name) end
+	return true
+end
+local minimizeKey = Enum.KeyCode.RightShift
+local waitingForMinimizeKey = false
+local minimizeKeyButton = nil
+
+State.saveMinimizeKey = function() end
+
+
+local function minimizeKeyName(keyCode)
+	local localizedNames = {
+		[Enum.KeyCode.RightShift] = "Shift derecho",
+		[Enum.KeyCode.LeftShift] = "Shift izquierdo",
+		[Enum.KeyCode.Space] = "Espacio",
+		[Enum.KeyCode.Backspace] = "Retroceso",
+		[Enum.KeyCode.Return] = "Enter",
+		[Enum.KeyCode.Escape] = "Esc",
+		[Enum.KeyCode.CapsLock] = "Bloq Mayús",
+		[Enum.KeyCode.KeypadZero] = "Numpad 0",
+		[Enum.KeyCode.KeypadOne] = "Numpad 1",
+		[Enum.KeyCode.KeypadTwo] = "Numpad 2",
+		[Enum.KeyCode.KeypadThree] = "Numpad 3",
+		[Enum.KeyCode.KeypadFour] = "Numpad 4",
+		[Enum.KeyCode.KeypadFive] = "Numpad 5",
+		[Enum.KeyCode.KeypadSix] = "Numpad 6",
+		[Enum.KeyCode.KeypadSeven] = "Numpad 7",
+		[Enum.KeyCode.KeypadEight] = "Numpad 8",
+		[Enum.KeyCode.KeypadNine] = "Numpad 9",
+	}
+	if localizedNames[keyCode] then
+		return localizedNames[keyCode]
+	end
+	local ok, printable = pcall(UserInputService.GetStringForKeyCode, UserInputService, keyCode)
+	if ok and type(printable) == "string" and printable ~= "" then
+		return printable
+	end
+	return keyCode.Name
+end
+
+
+local function minimizeKeyText()
+	return "Keybind: " .. minimizeKeyName(minimizeKey)
+end
+local UiMotion = {
+	minimized = false,
+	dragging = false,
+	dragTarget = nil,
+	dragStart = nil,
+	startPosition = nil,
+	dragDistance = 0,
+	expandedPosition = AnimationRoot.Position,
+	bubblePosition = MiniBubble.Position,
+	transitionId = 0,
+	entranceRootTween = nil,
+	entranceFrameTweens = {},
+	minimizeTweens = {},
+	shuttingDown = false,
+}
+
+
+local function floatMiniIcon(position)
+	if not MiniIcon or not MiniIcon.Parent then return end
+	MiniIcon.Parent = ScreenGui
+	MiniIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+	MiniIcon.Position = position
+	MiniIcon.Size = UDim2.fromOffset(
+		math.max(1, MiniBubble.AbsoluteSize.X),
+		math.max(1, MiniBubble.AbsoluteSize.Y)
+	)
+	MiniIcon.ZIndex = 210
+end
+
+
+local function dockMiniIcon()
+	if not MiniIcon then return end
+	MiniIcon.Parent = MiniBubble
+	MiniIcon.AnchorPoint = Vector2.zero
+	MiniIcon.Position = UDim2.fromOffset(0, 0)
+	MiniIcon.Size = UDim2.new(1, 0, 0.58, 0)
+	MiniIcon.ZIndex = 101
+end
+
+
+local function cancelTweenList(list)
+	for index, tween in ipairs(list) do
+		pcall(tween.Cancel, tween)
+		list[index] = nil
+	end
+end
+
+
+local function moveHub(position)
+	AnimationRoot.Position = position
+end
+
+
+local function moveBubble(position)
+	MiniBubble.Position = position
+end
+
+
+local function clampUiPosition(centerX, centerY, width, height)
+	local viewport = viewportSize()
+	local halfWidth = math.min(width * 0.5, viewport.X * 0.5)
+	local halfHeight = math.min(height * 0.5, viewport.Y * 0.5)
+	local maxX = math.max(halfWidth, viewport.X - halfWidth)
+	local maxY = math.max(halfHeight, viewport.Y - halfHeight)
+	centerX = math.clamp(centerX, halfWidth, maxX)
+	centerY = math.clamp(centerY, halfHeight, maxY)
+	return UDim2.fromOffset(math.floor(centerX + 0.5), math.floor(centerY + 0.5))
+end
+
+
+local function freeBubblePosition(startPosition, delta)
+	return UDim2.new(
+		startPosition.X.Scale,
+		startPosition.X.Offset + delta.X,
+		startPosition.Y.Scale,
+		startPosition.Y.Offset + delta.Y
+	)
+end
+
+
+State.rememberMiniBubblePosition = function()
+	if MiniBubble and MiniBubble.Parent then
+		UiMotion.bubblePosition = MiniBubble.Position
+	end
+end
+
+
+track(UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if not UserInputService.KeyboardEnabled or input.UserInputType ~= Enum.UserInputType.Keyboard then
+		return
+	end
+	if waitingForMinimizeKey then
+		waitingForMinimizeKey = false
+		if input.KeyCode ~= Enum.KeyCode.Escape and input.KeyCode ~= Enum.KeyCode.Unknown then
+			minimizeKey = input.KeyCode
+			State.saveMinimizeKey(minimizeKey)
+		end
+		if minimizeKeyButton and minimizeKeyButton.Parent then
+			minimizeKeyButton.Text = minimizeKeyText()
+		end
+		return
+	end
+	if gameProcessed or UserInputService:GetFocusedTextBox() then
+		return
+	end
+	if input.KeyCode == minimizeKey then
+		setMinimized(not UiMotion.minimized)
+	end
+end))
+
+track(DragHandle.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		UiMotion.dragging = true
+		UiMotion.dragTarget = "main"
+		UiMotion.dragStart = input.Position
+		UiMotion.startPosition = AnimationRoot.Position
+		UiMotion.dragDistance = 0
+	end
+end))
+
+track(MiniDragHandle.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		UiMotion.dragging = true
+		UiMotion.dragTarget = "bubble"
+		UiMotion.dragStart = input.Position
+		UiMotion.startPosition = MiniBubble.Position
+		UiMotion.dragDistance = 0
+	end
+end))
+
+track(UserInputService.InputChanged:Connect(function(input)
+	if not UiMotion.dragging or not UiMotion.dragStart or not UiMotion.startPosition then
+		return
+	end
+	if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
+		return
+	end
+	local delta = input.Position - UiMotion.dragStart
+	UiMotion.dragDistance = delta.Magnitude
+	if UiMotion.dragTarget == "bubble" then
+		moveBubble(freeBubblePosition(UiMotion.startPosition, delta))
+	else
+		local viewport = viewportSize()
+		local centerX = viewport.X * UiMotion.startPosition.X.Scale + UiMotion.startPosition.X.Offset + delta.X
+		local centerY = viewport.Y * UiMotion.startPosition.Y.Scale + UiMotion.startPosition.Y.Offset + delta.Y
+		moveHub(clampUiPosition(centerX, centerY, hubWidth, hubHeight))
+	end
+end))
+
+track(UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		if UiMotion.dragging and UiMotion.dragDistance >= 8 then
+			if UiMotion.dragTarget == "bubble" then
+				State.rememberMiniBubblePosition()
+			else
+				UiMotion.expandedPosition = AnimationRoot.Position
+			end
+		end
+		UiMotion.dragging = false
+		UiMotion.dragTarget = nil
+		UiMotion.dragStart = nil
+		UiMotion.startPosition = nil
+	end
+end))
+
+track(DragHandle.Activated:Connect(function()
+	if UiMotion.dragDistance < 8 then
+		setMinimized(true)
+	end
+end))
+
+track(MiniDragHandle.Activated:Connect(function()
+	if UiMotion.dragDistance < 8 then
+		setMinimized(not UiMotion.minimized)
+	end
+end))
+
+
+shutdown = function(immediate, guiDestroying)
+	if UiMotion.shuttingDown then
+		return
+	end
+	UiMotion.shuttingDown = true
+	State.shuttingDown = true
+	if UiMotion.entranceRootTween then
+		pcall(UiMotion.entranceRootTween.Cancel, UiMotion.entranceRootTween)
+		UiMotion.entranceRootTween = nil
+	end
+	cancelTweenList(UiMotion.entranceFrameTweens)
+	cancelTweenList(UiMotion.minimizeTweens)
+	State.running = false
+	for _, callback in ipairs(cleanupActions) do
+		pcall(callback)
+	end
+	disconnectAll()
+	if immediate then
+		if not guiDestroying and ScreenGui and ScreenGui.Parent then
+			ScreenGui:Destroy()
+		end
+		return
+	end
+	local info = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+	local currentWidth = MainFrame.AbsoluteSize.X
+	local currentHeight = MainFrame.AbsoluteSize.Y
+	local closeWidth = math.floor(currentWidth * 0.9)
+	local closeHeight = math.floor(currentHeight * 0.9)
+	local currentPosition = AnimationRoot.Position
+	local closePosition = UDim2.new(
+		currentPosition.X.Scale,
+		currentPosition.X.Offset,
+		currentPosition.Y.Scale,
+		currentPosition.Y.Offset + 14
+	)
+	TweenService:Create(AnimationRoot, info, {
+		Position = closePosition,
+	}):Play()
+	TweenService:Create(MainFrame, info, {
+		Size = UDim2.fromOffset(math.max(1, closeWidth - 2), math.max(1, closeHeight - 2)),
+	}):Play()
+	TweenService:Create(Border, info, {
+		Size = UDim2.fromOffset(closeWidth, closeHeight),
+	}):Play()
+	TweenService:Create(Shadow, info, {
+		Size = UDim2.fromOffset(closeWidth, closeHeight),
+	}):Play()
+	task.delay(0.32, function()
+		if ScreenGui and ScreenGui.Parent then
+			ScreenGui:Destroy()
+		end
+	end)
+end
+
+Controller.Shutdown = shutdown
+track(ScreenGui.Destroying:Connect(function()
+	if State.running then shutdown(true, true) end
+end))
+Controller.State = State
+Controller.Config = CONFIG
+Controller.Pages = Pages
+Controller.Tabs = TabButtons
+Controller.ShowTab = refreshTabs
+State.refreshResponsiveLayout = function()
+	local newWidth, newHeight = getHubSize()
+	if newWidth == hubWidth and newHeight == hubHeight then return false end
+	hubWidth, hubHeight = newWidth, newHeight
+	AnimationRoot.Size = UDim2.fromOffset(hubWidth, hubHeight)
+	MainFrame.Size = UDim2.fromOffset(math.max(1, hubWidth - 2), math.max(1, hubHeight - 2))
+	Border.Size = UDim2.fromOffset(hubWidth, hubHeight)
+	Shadow.Size = UDim2.fromOffset(hubWidth, hubHeight)
+	if State.motionShell and not State.motionShell.Visible then State.motionShell.Size = UDim2.fromOffset(hubWidth, hubHeight) end
+	local viewport = viewportSize()
+	local centerX = viewport.X * AnimationRoot.Position.X.Scale + AnimationRoot.Position.X.Offset
+	local centerY = viewport.Y * AnimationRoot.Position.Y.Scale + AnimationRoot.Position.Y.Offset
+	UiMotion.expandedPosition = clampUiPosition(centerX, centerY, hubWidth, hubHeight)
+	if not UiMotion.minimized then AnimationRoot.Position = UiMotion.expandedPosition end
+	local bubbleX = viewport.X * MiniBubble.Position.X.Scale + MiniBubble.Position.X.Offset
+	local bubbleY = viewport.Y * MiniBubble.Position.Y.Scale + MiniBubble.Position.Y.Offset
+	MiniBubble.Position = clampUiPosition(bubbleX, bubbleY, MiniBubble.AbsoluteSize.X, MiniBubble.AbsoluteSize.Y)
+	UiMotion.bubblePosition = MiniBubble.Position
+	return true
+end
+State.responsiveSerial = 0
+State.queueResponsiveLayout = function()
+	State.responsiveSerial = State.responsiveSerial + 1
+	local serial = State.responsiveSerial
+	task.delay(0.12, function() if State.running and serial == State.responsiveSerial then State.refreshResponsiveLayout() end end)
+end
+State.bindResponsiveCamera = function()
+	if State.responsiveCameraConnection then pcall(State.responsiveCameraConnection.Disconnect, State.responsiveCameraConnection) end
+	local camera = workspace.CurrentCamera
+	if camera then State.responsiveCameraConnection = track(camera:GetPropertyChangedSignal("ViewportSize"):Connect(State.queueResponsiveLayout)) end
+	State.queueResponsiveLayout()
+end
+State.bindResponsiveCamera()
+track(workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(State.bindResponsiveCamera))
+setHideFrames = function(value)
+	value = value == true
+	if not MainFrame then return end
+	MainFrame.Visible = not value
+end
+
+setMinimized = function(value)
+	value = value == true
+	if not UiMotion or UiMotion.shuttingDown then return end
+	if UiMotion.minimized == value then return end
+	UiMotion.minimized = value
+	if value then
+		UiMotion.savedTab = State.currentTab
+		UiMotion.expandedPosition = AnimationRoot.Position
+	elseif UiMotion.savedTab and Pages[UiMotion.savedTab] then
+		State.currentTab = UiMotion.savedTab
+		refreshTabs(UiMotion.savedTab)
+	end
+	if State.rememberMiniBubblePosition then
+		State.rememberMiniBubblePosition()
+	end
+	if value then
+		AnimationRoot.Visible = false
+		MiniBubble.Visible = true
+	else
+		AnimationRoot.Visible = true
+		AnimationRoot.Position = UiMotion.expandedPosition
+	end
+	State.pushOutput("MINIMIZE", value and "Hub minimizado" or "Hub restaurado")
+end
+
+Controller.SetMinimized = setMinimized
+Controller.SetHideFrames = setHideFrames
+Controller.SetTab = function(name)
+	if not Pages[name] then return false end
+	refreshTabs(name)
+	return true
+end
+Controller.GetCurrentTab = function() return State.currentTab end
+Controller.ScreenGui = ScreenGui
+Controller.MainFrame = MainFrame
+Controller.MiniBubble = MiniBubble
+
+-- Keep the player name/count and live FPS + ping in the mini bubble.
+task.spawn(function()
+	local frames = 0
+	local last = os.clock()
+	local fps = 0
+
+	local heartbeatConnection
+	heartbeatConnection = RunService.Heartbeat:Connect(function()
+		if not State.running then
+			if heartbeatConnection then heartbeatConnection:Disconnect() end
+			return
+		end
+		frames += 1
+		local now = os.clock()
+		if now - last >= 0.5 then
+			fps = math.floor(frames / (now - last) + 0.5)
+			frames = 0
+			last = now
+		end
+
+		if State.MiniIdentity then
+			State.MiniIdentity.Text = LP.DisplayName .. " · " .. #Players:GetPlayers() .. "/" .. Players.MaxPlayers
+		end
+
+		if State.MiniStats then
+			local ping = math.floor((LP:GetNetworkPing() or 0) * 1000 + 0.5)
+			State.MiniStats.Text = string.format("%d FPS  •  %d ms", fps, ping)
+			State.MiniStats.TextColor3 = State.pingStatusColor(ping)
+		end
+	end)
+
+	task.wait(0.1)
+end)
+
+
+do
+	MiniIcon.Text = "Tpm Hub"
+	MiniIcon.TextStrokeTransparency = 0.8
+	MiniIcon.Position = UDim2.fromOffset(6, 2)
+	MiniIcon.Size = UDim2.new(1, -12, 0, 22)
+	MiniIcon.TextSize = MIN_WIDTH < 140 and 14 or 17
+	MiniIcon:SetAttribute("NoTranslate", true)
+	local identity = Instance.new("TextLabel")
+	identity.Name = "Player"
+	identity.BackgroundTransparency = 1
+	identity.BorderSizePixel = 0
+	identity.Position = UDim2.fromOffset(7, 30)
+	identity.Size = UDim2.new(1, -14, 0, 15)
+	identity.TextColor3 = C.soft
+	identity.Font = Enum.Font.GothamMedium
+	identity.TextSize = 10
+	identity.TextTruncate = Enum.TextTruncate.AtEnd
+	identity.ZIndex = MiniIcon.ZIndex
+	identity:SetAttribute("NoTranslate", true)
+	identity:SetAttribute("KeepTextStyle", true)
+	identity.Parent = MiniBubble
+	State.MiniIdentity = identity
+	State.MiniStats.Visible = true
+
+end
+
+do
+	local original = State.applyTheme
+	State.applyTheme = function(name, quiet)
+		local accepted = original(name, quiet)
+		if not accepted then return false end
+		local treatment = ({ Violeta = { -35, 0.29, 0.22 }, Galaxia = { 90, 0.18, 0.28 } })[name]
+		if treatment then
+			for _, object in ipairs(ScreenGui:GetDescendants()) do
+				if object:IsA("UIGradient") and object.Name == "Surface" then
+					object.Rotation = treatment[1]
+				end
+				if object:IsA("GuiObject") and object:GetAttribute("SurfaceRow") then
+					object.BackgroundTransparency = treatment[2]
+				end
+			end
+			local art = MainFrame:FindFirstChild("BackgroundArt")
+			if art then art.ImageTransparency = treatment[3] end
+		end
+		return accepted
+	end
+end
+
+
+AnimationRoot.Position = UDim2.fromScale(0.5, 0.5)
+MainFrame.Size = UDim2.fromOffset(math.max(1, hubWidth - 2), math.max(1, hubHeight - 2))
+Border.Size = UDim2.fromOffset(hubWidth, hubHeight)
+Shadow.Size = UDim2.fromOffset(hubWidth, hubHeight)
+UiMotion.expandedPosition = AnimationRoot.Position
+UiMotion.savedTab = nil
+
+TabBar.CanvasSize = UDim2.fromOffset(tabLayout.AbsoluteContentSize.X + 14, 0)
+
+State.applyTheme(State.themeName, true)
+State.ready = true
+
+local Library = {}
+
+Library.Version = "1.0.0"
+Library.State = State
+Library.Controller = Controller
+Library.Config = CONFIG
+
+local Window = {}
+
+local function selectTab(name)
+	if type(name) ~= "string" or not Pages[name] then return false end
+	refreshTabs(name)
+	return true
+end
+
+function Window:SetTitle(text)
+	HeaderTitle.Text = tostring(text)
+end
+
+function Window:Tab(options)
+	local name, width = options, 88
+	if type(options) == "table" then
+		name = options.Name or options.name
+		width = options.Width or options.width or 88
+	end
+	if type(name) ~= "string" or name == "" then return nil end
+	local page = Pages[name]
+	if not page then
+		local order = 0
+		for _ in pairs(Pages) do order = order + 1 end
+		page = addTab(name, width, order + 1)
+	end
+	if not State.currentTab then
+		refreshTabs(name)
+	end
+
+	local Tab = {}
+	Tab.Name = name
+	Tab.Page = page
+
+	function Tab:Section(text)
+		addSection(page, text)
+	end
+
+	function Tab:Button(text, callback)
+		addButton(page, text, callback)
+	end
+
+	function Tab:Toggle(text, default, callback)
+		local controller = addToggle(page, text, callback)
+		if default == true then
+			controller:Set(true, true)
+		end
+		return controller
+	end
+
+	function Tab:Slider(text, minimum, maximum, default, callback)
+		return addSlider(page, text, minimum, maximum, default, callback)
+	end
+
+	function Tab:Dropdown(text, values, default, callback)
+		local data = addSelector(page, text, values, callback)
+		if default ~= nil then
+			data:SetValue(default)
+		end
+		return data
+	end
+
+	function Tab:Textbox(text, placeholder, default, callback)
+		local box = addInput(page, text, placeholder, callback)
+		if default ~= nil then
+			box.Text = tostring(default)
+		end
+		return box
+	end
+
+	function Tab:Label(text, color)
+		return addInfoRow(page, "", text, color or C.soft, false, false)
+	end
+
+	function Tab:Row(label, value, color, indicator, accent)
+		return addInfoRow(page, label or "", value or "", color or C.white,
+			indicator == true, accent == true)
+	end
+
+	function Tab:Select()
+		return selectTab(name)
+	end
+
+	return Tab
+end
+
+function Window:SelectTab(name)
+	return selectTab(name)
+end
+
+function Window:SelectedTab()
+	return State.currentTab
+end
+
+function Window:Minimize()
+	setMinimized(true)
+end
+
+function Window:Restore()
+	setMinimized(false)
+end
+
+function Window:SetMinimized(value)
+	setMinimized(value == true)
+end
+
+function Window:IsMinimized()
+	return UiMotion.minimized == true
+end
+
+function Window:SetTheme(name)
+	return State.applyTheme(name, true)
+end
+
+function Window:Destroy()
+	if State.running then
+		shutdown(false, false)
+	end
+end
+
+function Library:CreateWindow(options)
+	options = options or {}
+	if options.Name then
+		HeaderTitle.Text = tostring(options.Name)
+	end
+	State.applyTheme(options.Theme or State.themeName, true)
+	return Window
+end
+
+Library.new = function(options)
+	return Library:CreateWindow(options)
+end
+
+Library.Window = function(options)
+	return Library:CreateWindow(options)
+end
+
+Library.Tab = function(options)
+	return Window:Tab(options)
+end
+
+do
+	local root = getgenv and getgenv() or _G
+	root.Library = Library
+end
+
+return Library
